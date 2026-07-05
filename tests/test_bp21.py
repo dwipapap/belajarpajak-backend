@@ -28,12 +28,20 @@ def _bp21_payload(class_id: int) -> dict:
         "recipient_identity_number": "3273010101010001",
         "recipient_name": "Siswa Simulasi BP21",
         "recipient_address": "Jl. Pendidikan No. 21",
+        "recipient_nitku": "3273010101010001000000",
+        "ptkp_status": "TK/0",
         "tax_object_code": "21-100-09",
         "income_type": "Honorarium tenaga ahli",
         "tax_nature": "non_final",
         "tax_facility": "none",
-        "dpp": 5_000_000,
+        "gross_income": 5_000_000,
+        "dpp_percent": "100.00",
         "rate_percent": "5.00",
+        "kap_kjs": "411121-100",
+        "document_type": "Invoice",
+        "document_number": "INV/2026/001",
+        "document_date": "2026-07-01",
+        "document_nitku": "1471110802000001000001",
     }
 
 

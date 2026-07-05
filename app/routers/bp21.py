@@ -31,14 +31,19 @@ _bp21_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role
 _bp21_review_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru))
 
 
-def _rate_to_basis_points(rate_percent: float) -> int:
-    rate = Decimal(str(rate_percent))
+def _percent_to_basis_points(percent: float) -> int:
+    rate = Decimal(str(percent))
     return int((rate * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def _basis_points_to_rate(rate_basis_points: int) -> float:
-    rate = (Decimal(rate_basis_points) / Decimal("100")).quantize(Decimal("0.01"))
+def _basis_points_to_percent(basis_points: int) -> float:
+    rate = (Decimal(basis_points) / Decimal("100")).quantize(Decimal("0.01"))
     return float(rate)
+
+
+def _calculate_dpp(gross_income: int, dpp_rate_basis_points: int) -> int:
+    value = Decimal(gross_income) * Decimal(dpp_rate_basis_points) / Decimal("10000")
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _calculate_income_tax(dpp: int, rate_basis_points: int, facility: Bp21TaxFacility) -> int:
@@ -68,13 +73,23 @@ def _to_read(slip: Bp21WithholdingSlip) -> Bp21Read:
         recipient_identity_number=slip.recipient_identity_number,
         recipient_name=slip.recipient_name,
         recipient_address=slip.recipient_address,
+        recipient_nitku=slip.recipient_nitku,
+        ptkp_status=slip.ptkp_status,
         tax_object_code=slip.tax_object_code,
         income_type=slip.income_type,
         tax_nature=slip.tax_nature,
         tax_facility=slip.tax_facility,
+        previous_gross_income=slip.previous_gross_income,
+        gross_income=slip.gross_income,
         dpp=slip.dpp,
-        rate_percent=_basis_points_to_rate(slip.rate_basis_points),
+        dpp_percent=_basis_points_to_percent(slip.dpp_rate_basis_points),
+        rate_percent=_basis_points_to_percent(slip.rate_basis_points),
         income_tax=slip.income_tax,
+        kap_kjs=slip.kap_kjs,
+        document_type=slip.document_type,
+        document_number=slip.document_number,
+        document_date=slip.document_date,
+        document_nitku=slip.document_nitku,
         score=slip.score,
         teacher_feedback=slip.teacher_feedback,
         created_at=slip.created_at,
@@ -270,7 +285,9 @@ def create_bp21(data: Bp21Create, current_user: CurrentUser, session: SessionDep
         class_id=data.class_id,
         siswa_id=data.siswa_id,
     )
-    rate_basis_points = _rate_to_basis_points(data.rate_percent)
+    rate_basis_points = _percent_to_basis_points(data.rate_percent)
+    dpp_rate_basis_points = _percent_to_basis_points(data.dpp_percent)
+    dpp = _calculate_dpp(data.gross_income, dpp_rate_basis_points)
     slip = Bp21WithholdingSlip(
         tenant_id=tenant_id,
         class_id=class_id,
@@ -284,13 +301,23 @@ def create_bp21(data: Bp21Create, current_user: CurrentUser, session: SessionDep
         recipient_identity_number=data.recipient_identity_number,
         recipient_name=data.recipient_name,
         recipient_address=data.recipient_address,
+        recipient_nitku=data.recipient_nitku,
+        ptkp_status=data.ptkp_status,
         tax_object_code=data.tax_object_code,
         income_type=data.income_type,
         tax_nature=data.tax_nature,
         tax_facility=data.tax_facility,
-        dpp=data.dpp,
+        previous_gross_income=data.previous_gross_income,
+        gross_income=data.gross_income,
+        dpp=dpp,
+        dpp_rate_basis_points=dpp_rate_basis_points,
         rate_basis_points=rate_basis_points,
-        income_tax=_calculate_income_tax(data.dpp, rate_basis_points, data.tax_facility),
+        income_tax=_calculate_income_tax(dpp, rate_basis_points, data.tax_facility),
+        kap_kjs=data.kap_kjs,
+        document_type=data.document_type,
+        document_number=data.document_number,
+        document_date=data.document_date,
+        document_nitku=data.document_nitku,
     )
     session.add(slip)
     session.commit()
@@ -328,11 +355,14 @@ def update_bp21(
     slip.siswa_id = resolved_siswa_id
 
     if "rate_percent" in payload:
-        slip.rate_basis_points = _rate_to_basis_points(payload.pop("rate_percent"))
+        slip.rate_basis_points = _percent_to_basis_points(payload.pop("rate_percent"))
+    if "dpp_percent" in payload:
+        slip.dpp_rate_basis_points = _percent_to_basis_points(payload.pop("dpp_percent"))
     for field, value in payload.items():
         if field in {"class_id", "siswa_id"}:
             continue
         setattr(slip, field, value)
+    slip.dpp = _calculate_dpp(slip.gross_income, slip.dpp_rate_basis_points)
     slip.income_tax = _calculate_income_tax(slip.dpp, slip.rate_basis_points, slip.tax_facility)
     session.add(slip)
     session.commit()

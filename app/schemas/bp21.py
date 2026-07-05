@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -22,14 +22,25 @@ class Bp21Base(BaseModel):
     recipient_identity_number: str = Field(max_length=32)
     recipient_name: str = Field(max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
+    recipient_nitku: str | None = Field(default=None, max_length=32)
+
+    ptkp_status: str | None = Field(default=None, max_length=10)
 
     tax_object_code: str = Field(max_length=30)
     income_type: str = Field(max_length=150)
     tax_nature: Bp21TaxNature = Bp21TaxNature.non_final
     tax_facility: Bp21TaxFacility = Bp21TaxFacility.none
 
-    dpp: int = Field(ge=0)
+    previous_gross_income: int = Field(default=0, ge=0)
+    gross_income: int = Field(ge=0)
+    dpp_percent: float = Field(ge=0, le=100)
     rate_percent: float = Field(ge=0, le=100)
+    kap_kjs: str | None = Field(default=None, max_length=20)
+
+    document_type: str | None = Field(default=None, max_length=60)
+    document_number: str | None = Field(default=None, max_length=60)
+    document_date: date | None = Field(default=None)
+    document_nitku: str | None = Field(default=None, max_length=32)
 
 
 class Bp21Create(Bp21Base):
@@ -53,14 +64,25 @@ class Bp21Update(BaseModel):
     recipient_identity_number: str | None = Field(default=None, max_length=32)
     recipient_name: str | None = Field(default=None, max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
+    recipient_nitku: str | None = Field(default=None, max_length=32)
+
+    ptkp_status: str | None = Field(default=None, max_length=10)
 
     tax_object_code: str | None = Field(default=None, max_length=30)
     income_type: str | None = Field(default=None, max_length=150)
     tax_nature: Bp21TaxNature | None = None
     tax_facility: Bp21TaxFacility | None = None
 
-    dpp: int | None = Field(default=None, ge=0)
+    previous_gross_income: int | None = Field(default=None, ge=0)
+    gross_income: int | None = Field(default=None, ge=0)
+    dpp_percent: float | None = Field(default=None, ge=0, le=100)
     rate_percent: float | None = Field(default=None, ge=0, le=100)
+    kap_kjs: str | None = Field(default=None, max_length=20)
+
+    document_type: str | None = Field(default=None, max_length=60)
+    document_number: str | None = Field(default=None, max_length=60)
+    document_date: date | None = Field(default=None)
+    document_nitku: str | None = Field(default=None, max_length=32)
 
 
 class Bp21Review(BaseModel):
@@ -95,15 +117,27 @@ class Bp21Read(BaseModel):
     recipient_identity_number: str
     recipient_name: str
     recipient_address: str | None
+    recipient_nitku: str | None
+
+    ptkp_status: str | None
 
     tax_object_code: str
     income_type: str
     tax_nature: Bp21TaxNature
     tax_facility: Bp21TaxFacility
 
+    previous_gross_income: int
+    gross_income: int
     dpp: int
+    dpp_percent: float
     rate_percent: float
     income_tax: int
+    kap_kjs: str | None
+
+    document_type: str | None
+    document_number: str | None
+    document_date: date | None
+    document_nitku: str | None
 
     score: int | None
     teacher_feedback: str | None

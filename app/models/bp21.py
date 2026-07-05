@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey
 from sqlalchemy import Enum as SAEnum
@@ -56,6 +56,9 @@ class Bp21WithholdingSlip(TimestampMixin, table=True):
     recipient_identity_number: str = Field(max_length=32)
     recipient_name: str = Field(max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
+    recipient_nitku: str | None = Field(default=None, max_length=32)
+
+    ptkp_status: str | None = Field(default=None, max_length=10)
 
     tax_object_code: str = Field(max_length=30)
     income_type: str = Field(max_length=150)
@@ -67,9 +70,18 @@ class Bp21WithholdingSlip(TimestampMixin, table=True):
         sa_column=Column(SAEnum(Bp21TaxFacility, name="bp21_tax_facility"), nullable=False),
     )
 
+    previous_gross_income: int = Field(default=0, ge=0)
+    gross_income: int = Field(default=0, ge=0)
     dpp: int = Field(default=0, ge=0)
+    dpp_rate_basis_points: int = Field(default=10000, ge=0)  # 10000 = 100.00%
     rate_basis_points: int = Field(default=0, ge=0)  # 500 = 5.00%
     income_tax: int = Field(default=0, ge=0)
+    kap_kjs: str | None = Field(default=None, max_length=20)
+
+    document_type: str | None = Field(default=None, max_length=60)
+    document_number: str | None = Field(default=None, max_length=60)
+    document_date: date | None = Field(default=None)
+    document_nitku: str | None = Field(default=None, max_length=32)
 
     score: int | None = Field(default=None, ge=0, le=100)
     teacher_feedback: str | None = Field(default=None, max_length=500)
