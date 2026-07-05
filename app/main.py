@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import auth, classes, dashboard, tenants, users
+from app.routers import auth, bp21, classes, dashboard, tenants, users
 
 API_PREFIX = "/api/v1"
 
@@ -39,7 +39,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    for router in (auth.router, tenants.router, users.router, classes.router, dashboard.router):
+    for router in (
+        auth.router,
+        tenants.router,
+        users.router,
+        classes.router,
+        bp21.router,
+        dashboard.router,
+    ):
         app.include_router(router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["meta"])

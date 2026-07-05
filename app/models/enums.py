@@ -16,3 +16,21 @@ class Role(StrEnum):
     admin = "admin"
     guru = "guru"
     siswa = "siswa"
+
+
+class Bp21Status(StrEnum):
+    draft = "draft"
+    issued = "issued"
+    invalid = "invalid"
+
+
+class Bp21TaxNature(StrEnum):
+    final = "final"
+    non_final = "non_final"
+
+
+class Bp21TaxFacility(StrEnum):
+    none = "none"
+    dtp = "dtp"
+    skb = "skb"
+    rate_0 = "rate_0"

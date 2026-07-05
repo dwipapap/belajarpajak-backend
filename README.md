@@ -92,8 +92,31 @@ Tests run against the Postgres in `DATABASE_URL` (no sqlite fallback, per spec).
 - **Token storage tradeoff**: the frontend keeps the access token in memory and the refresh token in `localStorage`. Acceptable for Phase 1 dev; revisit (httpOnly cookies) before production.
 - **Docker deliberately deferred** to the deployment phase — dev is Windows-native against Laragon's Postgres.
 
+## Demo module: simulated e-Bupot BP21
+
+The backend now includes a first demo workflow for **BP21 - Bukti Pemotongan Selain
+Pegawai Tetap**:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/bp21` | List BP21 documents with status/class/student/month/year filters |
+| GET | `/api/v1/bp21/summary` | Count draft, issued, invalid, and total documents |
+| POST | `/api/v1/bp21` | Create a BP21 draft and calculate PPh automatically |
+| GET | `/api/v1/bp21/{slip_id}` | Read one BP21 document |
+| PATCH | `/api/v1/bp21/{slip_id}` | Update a draft document |
+| POST | `/api/v1/bp21/{slip_id}/issue` | Publish a draft and generate a withholding number |
+| POST | `/api/v1/bp21/{slip_id}/invalidate` | Mark a document invalid (superadmin/admin/guru) |
+| PATCH | `/api/v1/bp21/{slip_id}/review` | Add score and teacher feedback |
+
+Access follows the existing tenancy/RBAC pattern:
+
+- `siswa`: create, edit, issue, and view their own BP21 documents.
+- `guru`: view/review BP21 documents in classes they teach.
+- `admin`: manage BP21 documents inside their own tenant.
+- `superadmin`: global read/review access.
+
 ## Phase 1 scope & what's next
 
-**In scope (done):** multi-tenant auth (login/refresh/me), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, seed data, Alembic migrations, smoke tests.
+**In scope (done):** multi-tenant auth (login/refresh/me), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, simulated e-Bupot BP21 workflow, seed data, Alembic migrations, smoke tests.
 
-**Next phases (not in this repo yet):** faktur pajak simulasi, bupot PPh 21/23, kode billing, SPT simulasi, PDF generation, grading, reports. All future tables will carry `tenant_id` and reuse the same tenancy pattern (`tenant_filter` in `app/core/deps.py`).
+**Next phases (not in this repo yet):** faktur pajak simulasi, bupot PPh 23, kode billing, SPT simulasi, PDF generation, expanded grading, reports. All future tables will carry `tenant_id` and reuse the same tenancy pattern (`tenant_filter` in `app/core/deps.py`).
