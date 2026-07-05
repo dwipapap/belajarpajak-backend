@@ -1,4 +1,4 @@
-"""add bp21 coretax-aligned fields
+"""add bp21 extra slip fields
 
 Revision ID: 4a3a0b885918
 Revises: 8d2d6e9c4a10
