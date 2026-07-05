@@ -29,11 +29,16 @@ def _enrolled_students(session: SessionDep, class_id: int) -> list[User]:
     ).all()
 
 
-@router.get("", response_model=list[ClassRead], dependencies=[_admin_guru])
+@router.get("", response_model=list[ClassRead], dependencies=[_admin_guru_siswa])
 def list_classes(current_user: CurrentUser, session: SessionDep) -> list[SchoolClass]:
+    """Admin: all classes in tenant. Guru: own classes. Siswa: enrolled classes."""
     query = select(SchoolClass).where(SchoolClass.tenant_id == current_user.tenant_id)
     if current_user.role == Role.guru:
         query = query.where(SchoolClass.guru_id == current_user.id)
+    elif current_user.role == Role.siswa:
+        query = query.join(Enrollment, Enrollment.class_id == SchoolClass.id).where(
+            Enrollment.siswa_id == current_user.id
+        )
     return session.exec(query.order_by(SchoolClass.id)).all()
 
 
