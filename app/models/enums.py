@@ -18,19 +18,39 @@ class Role(StrEnum):
     siswa = "siswa"
 
 
-class Bp21Status(StrEnum):
+class SlipStatus(StrEnum):
     draft = "draft"
     issued = "issued"
     invalid = "invalid"
 
 
-class Bp21TaxNature(StrEnum):
+class SlipTaxNature(StrEnum):
     final = "final"
     non_final = "non_final"
 
 
-class Bp21TaxFacility(StrEnum):
+class SlipTaxFacility(StrEnum):
     none = "none"
     dtp = "dtp"
     skb = "skb"
     rate_0 = "rate_0"
+
+
+# All bupot slip types share one lifecycle; the per-table Postgres enum type
+# names ("bp21_status", "bp26_status", ...) are set at the column definitions.
+Bp21Status = Bp26Status = SlipStatus
+Bp21TaxNature = Bp26TaxNature = SlipTaxNature
+Bp21TaxFacility = Bp26TaxFacility = SlipTaxFacility
+
+
+class Bp26SptFlag(StrEnum):
+    """Issued-only lifecycle flags for the 'Telah Terbit' filters."""
+
+    reported_in_spt = "reported_in_spt"
+    objection_in_progress = "objection_in_progress"
+    objection_completed = "objection_completed"
+    objection_rejected_formal = "objection_rejected_formal"
+    objection_withdrawal_review = "objection_withdrawal_review"
+    objection_withdrawal_accepted = "objection_withdrawal_accepted"
+    spt_audited = "spt_audited"
+    spt_legal_process = "spt_legal_process"

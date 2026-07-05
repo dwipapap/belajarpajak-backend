@@ -16,8 +16,8 @@ class Bp21WithholdingSlip(TimestampMixin, table=True):
     """Draft/issued BP21 document for the learning simulator.
 
     BP21 represents a withholding slip for PPh 21 recipients other than permanent
-    employees. The simulator keeps the workflow intentionally small but aligned to
-    Coretax surfaces: draft/not issued, issued, and invalid.
+    employees. The simulator keeps the workflow intentionally small:
+    draft/not issued, issued, and invalid.
     """
 
     __tablename__ = "bp21_withholding_slips"
