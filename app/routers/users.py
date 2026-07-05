@@ -28,12 +28,17 @@ def list_users(
     current_user: CurrentUser,
     session: SessionDep,
     role: Role | None = None,
+    tenant_id: int | None = None,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ) -> UserListResponse:
     conditions = []
     if current_user.role == Role.admin:
+        # Admin is always confined to own tenant; the tenant_id param is ignored.
         conditions.append(User.tenant_id == current_user.tenant_id)
+    elif tenant_id is not None:
+        # Superadmin may narrow the list to one tenant (tenant switcher in the UI).
+        conditions.append(User.tenant_id == tenant_id)
     if role is not None:
         conditions.append(User.role == role)
 
