@@ -12,6 +12,7 @@ from app.models.enums import (
 )
 from app.models.school_class import SchoolClass
 from app.models.slip import WithholdingSlip
+from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
 from app.models.tenant import Tenant
 from app.models.user import User
 
@@ -28,4 +29,6 @@ __all__ = [
     "SchoolClass",
     "Enrollment",
     "WithholdingSlip",
+    "TierPtkp",
+    "TarifProgresifPasal17",
 ]

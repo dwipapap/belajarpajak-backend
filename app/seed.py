@@ -14,10 +14,31 @@ from app.db import engine
 from app.models.enrollment import Enrollment
 from app.models.enums import Role, TenantType
 from app.models.school_class import SchoolClass
+from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
 from app.models.tenant import Tenant
 from app.models.user import User
 
 SEED_PASSWORD = "Password123!"
+TARIF_YEARS = (2024, 2025, 2026)
+
+PTKP_DEFAULTS: dict[str, int] = {
+    "TK/0": 54_000_000,
+    "TK/1": 58_500_000,
+    "TK/2": 63_000_000,
+    "TK/3": 67_500_000,
+    "K/0": 58_500_000,
+    "K/1": 63_000_000,
+    "K/2": 67_500_000,
+    "K/3": 72_000_000,
+}
+
+PROGRESSIVE_DEFAULTS: tuple[tuple[int, int | None, int], ...] = (
+    (0, 60_000_000, 500),
+    (60_000_000, 250_000_000, 1500),
+    (250_000_000, 500_000_000, 2500),
+    (500_000_000, 5_000_000_000, 3000),
+    (5_000_000_000, None, 3500),
+)
 
 TENANTS = [
     {"name": "SMK Negeri 1 Pekanbaru", "slug": "smkn1-pku", "type": TenantType.smk},
@@ -145,6 +166,7 @@ def seed(session: Session) -> list[dict]:
                 if exists is None:
                     session.add(Enrollment(class_id=school_class.id, siswa_id=siswa.id))
 
+    seed_tarif_pajak(session)
     session.commit()
     return credentials
 
@@ -161,11 +183,49 @@ def _print_credentials(credentials: list[dict]) -> None:
     print("=" * 60 + "\n")
 
 
+def seed_tarif_pajak(session: Session) -> None:
+    for tahun in TARIF_YEARS:
+        for status_kode, jumlah_ptkp in PTKP_DEFAULTS.items():
+            exists = session.exec(
+                select(TierPtkp).where(
+                    TierPtkp.status_kode == status_kode,
+                    TierPtkp.tahun_pajak == tahun,
+                )
+            ).first()
+            if exists is None:
+                session.add(
+                    TierPtkp(
+                        status_kode=status_kode,
+                        jumlah_ptkp=jumlah_ptkp,
+                        tahun_pajak=tahun,
+                    )
+                )
+
+        for batas_bawah, batas_atas, persentase_basis_points in PROGRESSIVE_DEFAULTS:
+            exists = session.exec(
+                select(TarifProgresifPasal17).where(
+                    TarifProgresifPasal17.batas_bawah == batas_bawah,
+                    TarifProgresifPasal17.tahun_pajak == tahun,
+                )
+            ).first()
+            if exists is None:
+                session.add(
+                    TarifProgresifPasal17(
+                        batas_bawah=batas_bawah,
+                        batas_atas=batas_atas,
+                        persentase_basis_points=persentase_basis_points,
+                        tahun_pajak=tahun,
+                    )
+                )
+
+
 def seed_if_empty() -> None:
-    """Seed only when the users table is empty (used for auto-seed on startup)."""
+    """Seed users only when empty; always ensure tariff defaults exist."""
     with Session(engine) as session:
         user_count = session.exec(select(func.count()).select_from(User)).one()
         if user_count > 0:
+            seed_tarif_pajak(session)
+            session.commit()
             return
         credentials = seed(session)
         _print_credentials(credentials)

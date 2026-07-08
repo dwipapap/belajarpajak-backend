@@ -16,7 +16,7 @@ from sqlmodel import Session, select
 from app.db import engine
 from app.main import app
 from app.models.user import User
-from app.seed import seed
+from app.seed import seed, seed_tarif_pajak
 
 
 def _db_reachable() -> bool:
@@ -57,6 +57,9 @@ def _ensure_seed() -> None:
         has_users = session.exec(select(User).limit(1)).first()
         if has_users is None:
             seed(session)
+        else:
+            seed_tarif_pajak(session)
+            session.commit()
 
 
 @pytest.fixture()

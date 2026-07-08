@@ -29,7 +29,7 @@ def _bp21_payload(class_id: int) -> dict:
         "recipient_name": "Siswa Simulasi BP21",
         "recipient_address": "Jl. Pendidikan No. 21",
         "recipient_nitku": "3273010101010001000000",
-        "ptkp_status": "TK/0",
+        "ptkp_status": None,
         "tax_object_code": "21-100-09",
         "income_type": "Honorarium tenaga ahli",
         "tax_nature": "non_final",
@@ -62,6 +62,61 @@ def test_siswa_can_create_and_issue_bp21(client: TestClient) -> None:
     assert issued_body["status"] == "issued"
     assert issued_body["withholding_number"].startswith("BP21-202607-")
     assert issued_body["electronic_signature_status"] == "signed"
+
+
+def test_bp21_non_final_with_ptkp_uses_progressive_tariff(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["gross_income"] = 10_000_000
+    payload["ptkp_status"] = "TK/0"
+    payload["rate_percent"] = "5.00"
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 201
+    assert created.json()["income_tax"] == 325_000
+
+
+def test_bp21_progressive_falls_back_without_tariff_year(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["tax_year"] = 2030
+    payload["ptkp_status"] = "TK/0"
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 201
+    assert created.json()["income_tax"] == 250_000
+
+
+def test_bp21_final_ignores_ptkp(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["tax_nature"] = "final"
+    payload["ptkp_status"] = "TK/0"
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 201
+    assert created.json()["income_tax"] == 250_000
+
+
+def test_bp21_update_recalculates_progressive_tax(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+
+    updated = client.patch(
+        f"/api/v1/bp21/{created['id']}",
+        headers=headers,
+        json={"gross_income": 10_000_000, "ptkp_status": "TK/0"},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["income_tax"] == 325_000
 
 
 def test_siswa_cannot_invalidate_bp21(client: TestClient) -> None:

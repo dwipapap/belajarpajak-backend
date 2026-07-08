@@ -30,6 +30,7 @@ from app.models.enums import (
 )
 from app.models.school_class import SchoolClass
 from app.models.slip import WithholdingSlip
+from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
 from app.models.user import User
 from app.schemas.slip import (
     SlipBulkIssue,
@@ -119,11 +120,80 @@ def calculate_income_tax(dpp: int, rate_basis_points: int, facility: SlipTaxFaci
     return int(tax.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _tax_by_basis_points(amount: int, rate_basis_points: int) -> int:
+    tax = Decimal(amount) * Decimal(rate_basis_points) / Decimal("10000")
+    return int(tax.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _calculate_bp21_progressive_tax(
+    session: Session,
+    *,
+    gross_income: int,
+    ptkp_status: str | None,
+    tax_year: int,
+) -> int | None:
+    if not ptkp_status:
+        return None
+
+    ptkp = session.exec(
+        select(TierPtkp.jumlah_ptkp).where(
+            TierPtkp.status_kode == ptkp_status,
+            TierPtkp.tahun_pajak == tax_year,
+            TierPtkp.is_active == True,
+        )
+    ).one_or_none()
+    if ptkp is None:
+        return None
+
+    brackets = session.exec(
+        select(TarifProgresifPasal17)
+        .where(
+            TarifProgresifPasal17.tahun_pajak == tax_year,
+            TarifProgresifPasal17.is_active == True,
+        )
+        .order_by(TarifProgresifPasal17.batas_bawah)
+    ).all()
+    if not brackets:
+        return None
+
+    pkp = max(0, gross_income * 12 - ptkp)
+    annual_tax = 0
+    for bracket in brackets:
+        if pkp <= bracket.batas_bawah:
+            continue
+        upper = bracket.batas_atas if bracket.batas_atas is not None else pkp
+        chunk = min(pkp, upper) - bracket.batas_bawah
+        if chunk <= 0:
+            continue
+        annual_tax += _tax_by_basis_points(chunk, bracket.persentase_basis_points)
+    return annual_tax // 12
+
+
 def _resolve_income_tax(
+    session: Session,
+    *,
+    slip_type: SlipType,
+    tax_nature: SlipTaxNature,
+    tax_facility: SlipTaxFacility,
+    gross_income: int,
     dpp: int,
     rate_basis_points: int,
-    tax_facility: SlipTaxFacility,
+    ptkp_status: str | None,
+    tax_year: int,
 ) -> int:
+    if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
+        return 0
+
+    if slip_type == SlipType.bp21 and tax_nature == SlipTaxNature.non_final:
+        progressive_tax = _calculate_bp21_progressive_tax(
+            session,
+            gross_income=gross_income,
+            ptkp_status=ptkp_status,
+            tax_year=tax_year,
+        )
+        if progressive_tax is not None:
+            return progressive_tax
+
     return calculate_income_tax(dpp, rate_basis_points, tax_facility)
 
 
@@ -319,7 +389,17 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             dpp=dpp,
             dpp_rate_basis_points=dpp_rate_basis_points,
             rate_basis_points=rate_basis_points,
-            income_tax=_resolve_income_tax(dpp, rate_basis_points, data.tax_facility),
+            income_tax=_resolve_income_tax(
+                session,
+                slip_type=slip_type,
+                tax_nature=data.tax_nature,
+                tax_facility=data.tax_facility,
+                gross_income=data.gross_income,
+                dpp=dpp,
+                rate_basis_points=rate_basis_points,
+                ptkp_status=data.ptkp_status,
+                tax_year=data.tax_year,
+            ),
         )
 
     def _export_slips(current_user: CurrentUser, session: SessionDep, conditions: list):
@@ -668,7 +748,15 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             setattr(slip, field, value)
         slip.dpp = calculate_dpp(slip.gross_income, slip.dpp_rate_basis_points)
         slip.income_tax = _resolve_income_tax(
-            slip.dpp, slip.rate_basis_points, slip.tax_facility
+            session,
+            slip_type=slip_type,
+            tax_nature=slip.tax_nature,
+            tax_facility=slip.tax_facility,
+            gross_income=slip.gross_income,
+            dpp=slip.dpp,
+            rate_basis_points=slip.rate_basis_points,
+            ptkp_status=slip.ptkp_status,
+            tax_year=slip.tax_year,
         )
         session.add(slip)
         session.commit()
