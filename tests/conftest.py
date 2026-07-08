@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
@@ -27,16 +28,30 @@ def _db_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _db_reachable(),
-    reason="Postgres not reachable via DATABASE_URL — see README to bootstrap the DB.",
-)
+def _test_db_skip_reason() -> str | None:
+    database = make_url(str(engine.url)).database or ""
+    if "test" not in database.lower():
+        return "DATABASE_URL must point to a dedicated test database."
+    if not _db_reachable():
+        return "Postgres not reachable via DATABASE_URL - see README to bootstrap the DB."
+    return None
+
+
+_SKIP_REASON = _test_db_skip_reason()
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    if _SKIP_REASON is None:
+        return
+    skip = pytest.mark.skip(reason=_SKIP_REASON)
+    for item in items:
+        item.add_marker(skip)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_seed() -> None:
     """Make sure seed data exists so login fixtures resolve."""
-    if not _db_reachable():
+    if _SKIP_REASON is not None:
         return
     with Session(engine) as session:
         has_users = session.exec(select(User).limit(1)).first()
