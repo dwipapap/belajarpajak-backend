@@ -24,6 +24,8 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    settings.validate_runtime_safety()
+
     app = FastAPI(
         title="Simulator Pajak — API",
         version="0.1.0",
