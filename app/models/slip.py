@@ -85,6 +85,11 @@ class WithholdingSlip(TimestampMixin, table=True):
     rate_basis_points: int = Field(default=0, ge=0)  # 500 = 5.00%
     income_tax: int = Field(default=0, ge=0)
     kap_kjs: str | None = Field(default=None, max_length=20)
+    negara_treaty: str | None = Field(default=None, max_length=5)
+    pasal_treaty: str | None = Field(default=None, max_length=20)
+    nomor_skd: str | None = Field(default=None, max_length=100)
+    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=10000)
+
     document_type: str | None = Field(default=None, max_length=60)
     document_number: str | None = Field(default=None, max_length=60)
     document_date: date | None = Field(default=None)

@@ -75,6 +75,10 @@ _IMPORT_FIELDS = (
     "dpp_percent",
     "rate_percent",
     "kap_kjs",
+    "negara_treaty",
+    "pasal_treaty",
+    "nomor_skd",
+    "tarif_treaty_basis_points",
     "document_type",
     "document_number",
     "document_date",
@@ -180,6 +184,8 @@ def _resolve_income_tax(
     rate_basis_points: int,
     ptkp_status: str | None,
     tax_year: int,
+    negara_treaty: str | None,
+    tarif_treaty_basis_points: int | None,
 ) -> int:
     if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
         return 0
@@ -193,6 +199,14 @@ def _resolve_income_tax(
         )
         if progressive_tax is not None:
             return progressive_tax
+
+    if (
+        slip_type == SlipType.bp26
+        and tax_nature == SlipTaxNature.non_final
+        and negara_treaty
+        and tarif_treaty_basis_points is not None
+    ):
+        return _tax_by_basis_points(dpp, tarif_treaty_basis_points)
 
     return calculate_income_tax(dpp, rate_basis_points, tax_facility)
 
@@ -399,6 +413,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                 rate_basis_points=rate_basis_points,
                 ptkp_status=data.ptkp_status,
                 tax_year=data.tax_year,
+                negara_treaty=data.negara_treaty,
+                tarif_treaty_basis_points=data.tarif_treaty_basis_points,
             ),
         )
 
@@ -510,6 +526,10 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             "dpp_percent": "100",
             "rate_percent": "20" if slip_type == SlipType.bp26 else "5",
             "kap_kjs": "411127-100" if slip_type == SlipType.bp26 else "411121-100",
+            "negara_treaty": "",
+            "pasal_treaty": "",
+            "nomor_skd": "",
+            "tarif_treaty_basis_points": "",
             "document_type": "Bukti Pembayaran",
             "document_number": "INV-001",
             "document_date": "2026-01-15",
@@ -757,6 +777,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             rate_basis_points=slip.rate_basis_points,
             ptkp_status=slip.ptkp_status,
             tax_year=slip.tax_year,
+            negara_treaty=slip.negara_treaty,
+            tarif_treaty_basis_points=slip.tarif_treaty_basis_points,
         )
         session.add(slip)
         session.commit()

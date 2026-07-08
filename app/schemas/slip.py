@@ -43,6 +43,10 @@ class SlipBase(BaseModel):
     dpp_percent: float = Field(ge=0, le=100)
     rate_percent: float = Field(ge=0, le=100)
     kap_kjs: str | None = Field(default=None, max_length=20)
+    negara_treaty: str | None = Field(default=None, max_length=5)
+    pasal_treaty: str | None = Field(default=None, max_length=20)
+    nomor_skd: str | None = Field(default=None, max_length=100)
+    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=10000)
 
     document_type: str | None = Field(default=None, max_length=60)
     document_number: str | None = Field(default=None, max_length=60)
@@ -87,6 +91,10 @@ class SlipUpdate(BaseModel):
     dpp_percent: float | None = Field(default=None, ge=0, le=100)
     rate_percent: float | None = Field(default=None, ge=0, le=100)
     kap_kjs: str | None = Field(default=None, max_length=20)
+    negara_treaty: str | None = Field(default=None, max_length=5)
+    pasal_treaty: str | None = Field(default=None, max_length=20)
+    nomor_skd: str | None = Field(default=None, max_length=100)
+    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=10000)
 
     document_type: str | None = Field(default=None, max_length=60)
     document_number: str | None = Field(default=None, max_length=60)
@@ -157,6 +165,10 @@ class SlipRead(BaseModel):
     rate_percent: float
     income_tax: int
     kap_kjs: str | None
+    negara_treaty: str | None
+    pasal_treaty: str | None
+    nomor_skd: str | None
+    tarif_treaty_basis_points: int | None
 
     document_type: str | None
     document_number: str | None
