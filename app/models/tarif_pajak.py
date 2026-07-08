@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import BigInteger, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -22,8 +22,8 @@ class TarifProgresifPasal17(SQLModel, table=True):
     __tablename__ = "tarif_progresif"
 
     id: int | None = Field(default=None, primary_key=True)
-    batas_bawah: int = Field(ge=0)
-    batas_atas: int | None = Field(default=None, ge=0)
+    batas_bawah: int = Field(sa_type=BigInteger(), ge=0)
+    batas_atas: int | None = Field(default=None, sa_type=BigInteger(), ge=0)
     persentase_basis_points: int = Field(ge=0, le=10000)
     tahun_pajak: int = Field(index=True)
     keterangan: str | None = Field(default=None, max_length=100)
