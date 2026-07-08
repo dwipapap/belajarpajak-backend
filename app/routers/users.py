@@ -8,6 +8,7 @@ from sqlmodel import func, select
 from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.security import hash_password
 from app.models.enums import Role
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.user import UserCreate, UserListResponse, UserRead, UserUpdate
 
@@ -81,6 +82,11 @@ def create_user(data: UserCreate, current_user: CurrentUser, session: SessionDep
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="tenant_id wajib untuk peran non-superadmin",
+        )
+    elif session.get(Tenant, tenant_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="tenant_id tidak valid",
         )
 
     email = data.email.lower()

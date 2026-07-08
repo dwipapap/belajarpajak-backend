@@ -8,6 +8,7 @@ from tests.conftest import auth_headers
 
 ADMIN_A = "admin@smkn1-pku.local"  # tenant A
 ADMIN_B = "admin@pcr.local"  # tenant B
+SUPERADMIN = "super@pajaksim.local"
 SISWA_A = "siswa1@smkn1-pku.local"
 
 
@@ -60,6 +61,49 @@ def test_siswa_cannot_create_users(client: TestClient) -> None:
         },
     )
     assert resp.status_code == 403
+
+
+def test_create_user_rejects_short_password(client: TestClient) -> None:
+    headers = auth_headers(client, ADMIN_A)
+    resp = client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "email": "short-password@smkn1-pku.local",
+            "password": "short",
+            "full_name": "Short Password",
+            "role": "siswa",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_update_user_rejects_short_password(client: TestClient) -> None:
+    headers = auth_headers(client, ADMIN_A)
+    user = client.get("/api/v1/users?size=1", headers=headers).json()["items"][0]
+    resp = client.patch(
+        f"/api/v1/users/{user['id']}",
+        headers=headers,
+        json={"password": "short"},
+    )
+    assert resp.status_code == 422
+
+
+def test_superadmin_create_user_rejects_invalid_tenant(client: TestClient) -> None:
+    headers = auth_headers(client, SUPERADMIN)
+    resp = client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "email": "invalid-tenant@example.local",
+            "password": "Password123!",
+            "full_name": "Invalid Tenant",
+            "role": "siswa",
+            "tenant_id": 999_999_999,
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
 
 
 def test_refresh_returns_new_access_token(client: TestClient) -> None:

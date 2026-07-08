@@ -14,7 +14,7 @@ _EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 class UserCreate(BaseModel):
     email: str = Field(pattern=_EMAIL_PATTERN, max_length=255)
-    password: str
+    password: str = Field(min_length=8)
     full_name: str
     role: Role
     # Only meaningful for superadmin (who may target any tenant). For admin the server
@@ -24,7 +24,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     full_name: str | None = None
-    password: str | None = None
+    password: str | None = Field(default=None, min_length=8)
     is_active: bool | None = None
 
 
