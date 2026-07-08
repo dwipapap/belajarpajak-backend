@@ -84,6 +84,10 @@ _CSV_COLUMNS = (
     "Fasilitas Pajak",
 )
 
+MAX_IMPORT_BYTES = 1_000_000
+MAX_IMPORT_ROWS = 500
+MAX_EXPORT_ROWS = 5_000
+
 
 def _to_read(slip: Bp26WithholdingSlip) -> Bp26Read:
     return slip_to_read(Bp26Read, slip)
@@ -112,7 +116,9 @@ def _period_conditions(
     return conditions
 
 
-def _build_slip(data: Bp26Create, current_user: CurrentUser, session: SessionDep) -> Bp26WithholdingSlip:
+def _build_slip(
+    data: Bp26Create, current_user: CurrentUser, session: SessionDep
+) -> Bp26WithholdingSlip:
     """Validate scope and construct an unsaved draft slip from a create payload."""
     tenant_id, class_id, siswa_id = resolve_slip_scope(
         session=session,
@@ -283,13 +289,11 @@ def bp26_export_csv(
     tax_month: Annotated[int | None, Query(ge=1, le=12)] = None,
 ) -> Response:
     """Download CSV by Period — columns follow the BP26 list view."""
-    query = _apply_access_filters(
-        select(Bp26WithholdingSlip)
-        .where(*_period_conditions(status_filter, tax_year, tax_month))
-        .order_by(Bp26WithholdingSlip.id),
+    slips = _export_slips(
         current_user,
+        session,
+        _period_conditions(status_filter, tax_year, tax_month),
     )
-    slips = session.exec(query).all()
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -327,13 +331,11 @@ def bp26_export_xml(
     tax_month: Annotated[int | None, Query(ge=1, le=12)] = None,
 ) -> Response:
     """Monitoring → XML export of accessible BP26 slips."""
-    query = _apply_access_filters(
-        select(Bp26WithholdingSlip)
-        .where(*_period_conditions(status_filter, tax_year, tax_month))
-        .order_by(Bp26WithholdingSlip.id),
+    slips = _export_slips(
         current_user,
+        session,
+        _period_conditions(status_filter, tax_year, tax_month),
     )
-    slips = session.exec(query).all()
 
     root = ET.Element("Bp26List")
     for slip in slips:
@@ -360,7 +362,12 @@ async def import_bp26_xml(
     file: UploadFile, current_user: CurrentUser, session: SessionDep
 ) -> Bp26ImportResult:
     """Impor data — accepts the XML format produced by GET /bp26/import-template."""
-    raw = await file.read()
+    raw = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File impor BP26 terlalu besar",
+        )
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as exc:
@@ -374,6 +381,11 @@ async def import_bp26_xml(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Tidak ada elemen <Bp26> dalam file",
+        )
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Maksimal {MAX_IMPORT_ROWS} baris BP26 per impor",
         )
 
     results: list[Bp26ImportRowResult] = []

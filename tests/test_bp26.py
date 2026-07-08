@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.routers.bp26 import MAX_IMPORT_BYTES, MAX_IMPORT_ROWS
 from tests.conftest import auth_headers
 
 ADMIN_B = "admin@pcr.local"
@@ -160,6 +161,27 @@ def test_import_xml_valid_and_invalid_rows(client: TestClient) -> None:
     assert bad_body["imported"] == 0
     assert bad_body["failed"] == 1
     assert "gross_income" in bad_body["results"][0]["error"]
+
+
+def test_import_xml_rejects_oversized_upload(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    resp = client.post(
+        "/api/v1/bp26/import-xml",
+        headers=headers,
+        files={"file": ("huge.xml", b"x" * (MAX_IMPORT_BYTES + 1), "application/xml")},
+    )
+    assert resp.status_code == 413
+
+
+def test_import_xml_rejects_too_many_rows(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    rows = "".join("<Bp26 />" for _ in range(MAX_IMPORT_ROWS + 1))
+    resp = client.post(
+        "/api/v1/bp26/import-xml",
+        headers=headers,
+        files={"file": ("many.xml", f"<Bp26List>{rows}</Bp26List>".encode(), "application/xml")},
+    )
+    assert resp.status_code == 422
 
 
 def test_other_tenant_admin_cannot_see_bp26(client: TestClient) -> None:
