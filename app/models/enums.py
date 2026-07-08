@@ -18,6 +18,13 @@ class Role(StrEnum):
     siswa = "siswa"
 
 
+class SlipType(StrEnum):
+    """e-Bupot form type. All types share one table, lifecycle, and feature set."""
+
+    bp21 = "bp21"
+    bp26 = "bp26"
+
+
 class SlipStatus(StrEnum):
     draft = "draft"
     issued = "issued"
@@ -36,14 +43,7 @@ class SlipTaxFacility(StrEnum):
     rate_0 = "rate_0"
 
 
-# All bupot slip types share one lifecycle; the per-table Postgres enum type
-# names ("bp21_status", "bp26_status", ...) are set at the column definitions.
-Bp21Status = Bp26Status = SlipStatus
-Bp21TaxNature = Bp26TaxNature = SlipTaxNature
-Bp21TaxFacility = Bp26TaxFacility = SlipTaxFacility
-
-
-class Bp26SptFlag(StrEnum):
+class SlipSptFlag(StrEnum):
     """Issued-only lifecycle flags for the 'Telah Terbit' filters."""
 
     reported_in_spt = "reported_in_spt"

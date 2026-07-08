@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.routers.bp26 import MAX_IMPORT_BYTES, MAX_IMPORT_ROWS
+from app.routers.slips import MAX_IMPORT_BYTES, MAX_IMPORT_ROWS
 from tests.conftest import auth_headers
 
 ADMIN_B = "admin@pcr.local"

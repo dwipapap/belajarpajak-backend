@@ -12,11 +12,11 @@ from alembic import context
 # Import settings and ALL models so SQLModel.metadata is fully populated.
 from app.core.config import settings
 from app.models import (  # noqa: F401  (imported for metadata side effects)
-    Bp21WithholdingSlip,
     Enrollment,
     SchoolClass,
     Tenant,
     User,
+    WithholdingSlip,
 )
 
 config = context.config
