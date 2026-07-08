@@ -202,12 +202,41 @@ def list_bp26(
 
 @router.get("/summary", response_model=Bp26Summary, dependencies=[_bp26_roles])
 def bp26_summary(current_user: CurrentUser, session: SessionDep) -> Bp26Summary:
-    query = _apply_access_filters(select(Bp26WithholdingSlip.status), current_user)
-    statuses = session.exec(query).all()
-    draft = sum(1 for item in statuses if item == Bp26Status.draft)
-    issued = sum(1 for item in statuses if item == Bp26Status.issued)
-    invalid = sum(1 for item in statuses if item == Bp26Status.invalid)
-    return Bp26Summary(draft=draft, issued=issued, invalid=invalid, total=len(statuses))
+    query = _apply_access_filters(
+        select(Bp26WithholdingSlip.status, func.count())
+        .select_from(Bp26WithholdingSlip)
+        .group_by(Bp26WithholdingSlip.status),
+        current_user,
+    )
+    counts = dict(session.exec(query).all())
+    return Bp26Summary(
+        draft=counts.get(Bp26Status.draft, 0),
+        issued=counts.get(Bp26Status.issued, 0),
+        invalid=counts.get(Bp26Status.invalid, 0),
+        total=sum(counts.values()),
+    )
+
+
+def _export_slips(current_user: CurrentUser, session: SessionDep, conditions: list):
+    total = session.exec(
+        _apply_access_filters(
+            select(func.count()).select_from(Bp26WithholdingSlip).where(*conditions),
+            current_user,
+        )
+    ).one()
+    if total > MAX_EXPORT_ROWS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Terlalu banyak data untuk ekspor. Persempit filter masa pajak atau status.",
+        )
+    query = _apply_access_filters(
+        select(Bp26WithholdingSlip)
+        .where(*conditions)
+        .order_by(Bp26WithholdingSlip.id)
+        .limit(MAX_EXPORT_ROWS),
+        current_user,
+    )
+    return session.exec(query).all()
 
 
 @router.get("/import-template", dependencies=[_bp26_roles])

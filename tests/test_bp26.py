@@ -220,3 +220,22 @@ def test_bulk_issue_and_export_csv(client: TestClient) -> None:
     assert export.headers["content-type"].startswith("text/csv")
     assert "Nomor Pemotongan" in export.text
     assert f"BP26-202607-{first['id']:06d}" in export.text
+
+
+def test_bp26_summary_counts_created_statuses_and_respects_tenant(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    other_headers = auth_headers(client, ADMIN_B)
+    class_id = _first_class_id(client, headers)
+    before = client.get("/api/v1/bp26/summary", headers=headers).json()
+    other_before = client.get("/api/v1/bp26/summary", headers=other_headers).json()
+
+    client.post("/api/v1/bp26", headers=headers, json=_bp26_payload(class_id))
+    issued = client.post("/api/v1/bp26", headers=headers, json=_bp26_payload(class_id)).json()
+    client.post(f"/api/v1/bp26/{issued['id']}/issue", headers=headers)
+
+    after = client.get("/api/v1/bp26/summary", headers=headers).json()
+    other_after = client.get("/api/v1/bp26/summary", headers=other_headers).json()
+    assert after["draft"] >= before["draft"] + 1
+    assert after["issued"] >= before["issued"] + 1
+    assert after["total"] >= before["total"] + 2
+    assert other_after == other_before

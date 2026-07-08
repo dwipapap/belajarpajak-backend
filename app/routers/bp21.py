@@ -103,12 +103,19 @@ def list_bp21(
 
 @router.get("/summary", response_model=Bp21Summary, dependencies=[_bp21_roles])
 def bp21_summary(current_user: CurrentUser, session: SessionDep) -> Bp21Summary:
-    query = _apply_access_filters(select(Bp21WithholdingSlip.status), current_user)
-    statuses = session.exec(query).all()
-    draft = sum(1 for item in statuses if item == Bp21Status.draft)
-    issued = sum(1 for item in statuses if item == Bp21Status.issued)
-    invalid = sum(1 for item in statuses if item == Bp21Status.invalid)
-    return Bp21Summary(draft=draft, issued=issued, invalid=invalid, total=len(statuses))
+    query = _apply_access_filters(
+        select(Bp21WithholdingSlip.status, func.count())
+        .select_from(Bp21WithholdingSlip)
+        .group_by(Bp21WithholdingSlip.status),
+        current_user,
+    )
+    counts = dict(session.exec(query).all())
+    return Bp21Summary(
+        draft=counts.get(Bp21Status.draft, 0),
+        issued=counts.get(Bp21Status.issued, 0),
+        invalid=counts.get(Bp21Status.invalid, 0),
+        total=sum(counts.values()),
+    )
 
 
 @router.post(

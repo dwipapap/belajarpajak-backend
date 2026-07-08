@@ -108,3 +108,22 @@ def test_guru_can_review_bp21_in_own_class(client: TestClient) -> None:
     body = resp.json()
     assert body["score"] == 90
     assert body["teacher_feedback"] == "Perhitungan sudah sesuai."
+
+
+def test_bp21_summary_counts_created_statuses_and_respects_tenant(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    other_headers = auth_headers(client, ADMIN_B)
+    class_id = _first_class_id(client, headers)
+    before = client.get("/api/v1/bp21/summary", headers=headers).json()
+    other_before = client.get("/api/v1/bp21/summary", headers=other_headers).json()
+
+    client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id))
+    issued = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+    client.post(f"/api/v1/bp21/{issued['id']}/issue", headers=headers)
+
+    after = client.get("/api/v1/bp21/summary", headers=headers).json()
+    other_after = client.get("/api/v1/bp21/summary", headers=other_headers).json()
+    assert after["draft"] >= before["draft"] + 1
+    assert after["issued"] >= before["issued"] + 1
+    assert after["total"] >= before["total"] + 2
+    assert other_after == other_before
