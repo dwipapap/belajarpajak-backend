@@ -35,9 +35,12 @@ The connection string lives ONLY in `.env`:
 
 ```
 DATABASE_URL=postgresql+psycopg://pajaksim:pajaksim_dev@localhost:5432/pajaksim
+APP_ENV=development
 ```
 
 If your Postgres runs on a non-default port, edit `.env` — nothing else changes. Every variable is documented in `.env.example`.
+
+Production must set `APP_ENV=production`, replace `SECRET_KEY` with a random secret, and set `AUTO_SEED=false`. The app refuses to start with unsafe production defaults.
 
 ## Run (PowerShell, from the repo root)
 
@@ -79,11 +82,11 @@ Tenants: **SMK Negeri 1 Pekanbaru** (`smkn1-pku`) and **Politeknik Caltex Riau**
 ## Tests & lint
 
 ```powershell
-uv run pytest
 uv run ruff check .
+uv run pytest
 ```
 
-Tests run against the Postgres in `DATABASE_URL` (no sqlite fallback, per spec). If the database is unreachable the suite **skips** with an explanatory message instead of failing.
+Tests require a dedicated Postgres database in `DATABASE_URL` (no sqlite fallback, per spec). The database name must clearly indicate a test database, for example `pajaksim_test`; otherwise the suite **skips** instead of mutating a development database. If the test database is unreachable the suite also skips with an explanatory message.
 
 ## Implementation notes / resolutions
 
