@@ -1,6 +1,6 @@
-# Simulator Pajak — Backend (Phase 1: Foundation)
+# Simulator Pajak — Backend
 
-FastAPI + SQLModel backend for a multi-tenant **tax administration learning simulator** for Indonesian schools (SMK), universities, and training institutions. Phase 1 delivers the foundation only: JWT auth, roles (RBAC), tenancy, and dashboard summary endpoints.
+FastAPI + SQLModel backend for a multi-tenant **tax administration learning simulator** for Indonesian schools (SMK), universities, and training institutions. The backend now covers the platform foundation plus simulated e-Bupot BP21/BP26 workflows and editable tax tariff reference data.
 
 The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nuxt + Nuxt UI).
 
@@ -9,6 +9,13 @@ The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nux
 - Python 3.12+ · FastAPI · SQLModel · Alembic · uv
 - PostgreSQL ≥ 14 (existing local install via Laragon — not managed by this repo)
 - JWT (access + refresh) with `pyjwt`, password hashing with `passlib[bcrypt]`
+
+## Current module coverage
+
+- Platform foundation: JWT auth, refresh tokens, RBAC, tenant isolation, users, classes, enrollments, role-shaped dashboard summaries.
+- Simulated e-Bupot: BP21 and BP26 withholding slips backed by one `withholding_slips` table with `slip_type` as discriminator.
+- Tax reference data: PTKP tiers and Pasal 17 progressive brackets used by BP21 non-final calculations.
+- Classroom workflow: siswa create/issue slips, guru/admin review and score, tenant scoping enforced server-side.
 
 ## Prerequisites
 
@@ -92,34 +99,60 @@ Tests require a dedicated Postgres database in `DATABASE_URL` (no sqlite fallbac
 
 - **bcrypt pinned `<4.1`**: passlib 1.7.4 reads `bcrypt.__about__.__version__`, which bcrypt 4.1+ removed. Hashing works either way; the pin silences a noisy startup warning.
 - **Email validation**: request schemas use a lightweight pattern instead of `EmailStr`, because the RFC validator rejects reserved TLDs like `.local` used by the (deliberately non-routable) seed accounts.
-- **Token storage tradeoff**: the frontend keeps the access token in memory and the refresh token in `localStorage`. Acceptable for Phase 1 dev; revisit (httpOnly cookies) before production.
+- **Token storage tradeoff**: the frontend keeps the access token in memory and the refresh token in `localStorage`. Acceptable for current development; revisit (httpOnly cookies) before production.
 - **Docker deliberately deferred** to the deployment phase — dev is Windows-native against Laragon's Postgres.
 
-## Demo module: simulated e-Bupot BP21
+## Simulated e-Bupot modules
 
-The backend now includes a first demo workflow for **BP21 - Bukti Pemotongan Selain
-Pegawai Tetap**:
+The backend includes national tax portal-inspired e-Bupot simulator workflows for **BP21** and **BP26**. Both modules share the same endpoint set and schema; the router scopes records by `slip_type`.
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/v1/bp21` | List BP21 documents with status/class/student/month/year filters |
-| GET | `/api/v1/bp21/summary` | Count draft, issued, invalid, and total documents |
-| POST | `/api/v1/bp21` | Create a BP21 draft and calculate PPh automatically |
-| GET | `/api/v1/bp21/{slip_id}` | Read one BP21 document |
-| PATCH | `/api/v1/bp21/{slip_id}` | Update a draft document |
-| POST | `/api/v1/bp21/{slip_id}/issue` | Publish a draft and generate a withholding number |
-| POST | `/api/v1/bp21/{slip_id}/invalidate` | Mark a document invalid (superadmin/admin/guru) |
-| PATCH | `/api/v1/bp21/{slip_id}/review` | Add score and teacher feedback |
+| GET | `/api/v1/{bp21\|bp26}` | List documents with status/class/student/month/year/facility filters |
+| GET | `/api/v1/{bp21\|bp26}/summary` | Count draft, issued, invalid, and total documents |
+| POST | `/api/v1/{bp21\|bp26}` | Create a draft and calculate PPh automatically |
+| GET | `/api/v1/{bp21\|bp26}/{slip_id}` | Read one document |
+| PATCH | `/api/v1/{bp21\|bp26}/{slip_id}` | Update a draft document |
+| DELETE | `/api/v1/{bp21\|bp26}/{slip_id}` | Delete a draft document |
+| POST | `/api/v1/{bp21\|bp26}/{slip_id}/issue` | Publish a draft and generate a withholding number |
+| POST | `/api/v1/{bp21\|bp26}/{slip_id}/cancel` | Cancel an issued document into invalid status |
+| POST | `/api/v1/{bp21\|bp26}/{slip_id}/invalidate` | Mark a document invalid (superadmin/admin/guru) |
+| PATCH | `/api/v1/{bp21\|bp26}/{slip_id}/spt-flag` | Set issued-document SPT/objection lifecycle flag |
+| PATCH | `/api/v1/{bp21\|bp26}/{slip_id}/review` | Add score and teacher feedback |
+| GET | `/api/v1/{bp21\|bp26}/import-template` | Download XML import template |
+| POST | `/api/v1/{bp21\|bp26}/import-xml` | Import draft documents from XML |
+| POST | `/api/v1/{bp21\|bp26}/bulk-issue` | Issue multiple drafts in one operation |
+| GET | `/api/v1/{bp21\|bp26}/export-csv` | Export accessible documents as CSV |
+| GET | `/api/v1/{bp21\|bp26}/export-xml` | Export accessible documents as XML |
+
+Tax calculation behavior:
+
+- BP21 non-final uses PTKP and Pasal 17 progressive annual brackets when matching active tariff data exists.
+- BP26 non-final can apply treaty rates when treaty country and tariff fields are present.
+- `skb` and `rate_0` facilities force income tax to zero.
+
+Tax tariff endpoints:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/tarif-pajak/ptkp` | List PTKP tiers |
+| POST | `/api/v1/tarif-pajak/ptkp` | Create PTKP tier (superadmin) |
+| PATCH | `/api/v1/tarif-pajak/ptkp/{ptkp_id}` | Update PTKP tier (superadmin) |
+| DELETE | `/api/v1/tarif-pajak/ptkp/{ptkp_id}` | Delete PTKP tier (superadmin) |
+| GET | `/api/v1/tarif-pajak/progresif` | List Pasal 17 progressive brackets |
+| POST | `/api/v1/tarif-pajak/progresif` | Create progressive bracket (superadmin) |
+| PATCH | `/api/v1/tarif-pajak/progresif/{bracket_id}` | Update progressive bracket (superadmin) |
+| DELETE | `/api/v1/tarif-pajak/progresif/{bracket_id}` | Delete progressive bracket (superadmin) |
 
 Access follows the existing tenancy/RBAC pattern:
 
-- `siswa`: create, edit, issue, and view their own BP21 documents.
-- `guru`: view/review BP21 documents in classes they teach.
-- `admin`: manage BP21 documents inside their own tenant.
+- `siswa`: create, edit, issue, and view their own documents.
+- `guru`: view/review documents in classes they teach.
+- `admin`: manage documents inside their own tenant.
 - `superadmin`: global read/review access.
 
-## Phase 1 scope & what's next
+## Scope & what's next
 
-**In scope (done):** multi-tenant auth (login/refresh/me), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, simulated e-Bupot BP21 workflow, seed data, Alembic migrations, smoke tests.
+**Done:** multi-tenant auth (login/refresh/me), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, simulated e-Bupot BP21/BP26 workflows, PTKP/progressive tariff management, seed data, Alembic migrations, smoke tests.
 
-**Next phases (not in this repo yet):** faktur pajak simulasi, bupot PPh 23, kode billing, SPT simulasi, PDF generation, expanded grading, reports. All future tables will carry `tenant_id` and reuse the same tenancy pattern (`tenant_filter` in `app/core/deps.py`).
+**Next phases:** faktur pajak simulasi, bupot PPh 23, kode billing, SPT simulasi, PDF generation, expanded grading, reports. All future tenant-scoped tables should carry `tenant_id` and reuse the same server-side tenancy pattern.

@@ -143,7 +143,7 @@ def _calculate_bp21_progressive_tax(
         select(TierPtkp.jumlah_ptkp).where(
             TierPtkp.status_kode == ptkp_status,
             TierPtkp.tahun_pajak == tax_year,
-            TierPtkp.is_active == True,
+            TierPtkp.is_active.is_(True),
         )
     ).one_or_none()
     if ptkp is None:
@@ -153,7 +153,7 @@ def _calculate_bp21_progressive_tax(
         select(TarifProgresifPasal17)
         .where(
             TarifProgresifPasal17.tahun_pajak == tax_year,
-            TarifProgresifPasal17.is_active == True,
+            TarifProgresifPasal17.is_active.is_(True),
         )
         .order_by(TarifProgresifPasal17.batas_bawah)
     ).all()

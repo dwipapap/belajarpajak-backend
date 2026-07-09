@@ -1,7 +1,7 @@
 """Simulated e-Bupot withholding slip model — one table for all form types.
 
 BP21 (PPh 21, domestic recipients) and BP26 (PPh 26, foreign recipients) share
-the same slip structure, lifecycle, and features in Coretax; they differ only in
+the same simulated slip structure and lifecycle; they differ only in
 data values (recipient identity, rates, final vs non-final). ``slip_type`` is a
 plain discriminator — every column is usable by every type.
 """

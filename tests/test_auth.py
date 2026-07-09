@@ -1,4 +1,4 @@
-"""Smoke tests: auth + RBAC + tenant isolation (Phase 1 quality bar §10)."""
+"""Smoke tests: auth + RBAC + tenant isolation."""
 
 from __future__ import annotations
 

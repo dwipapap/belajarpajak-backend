@@ -1,7 +1,7 @@
 [project]
 name = "pajak-simulator-backend"
 version = "0.1.0"
-description = "Tax administration learning simulator — backend (Phase 1 foundation)"
+description = "Tax administration learning simulator backend"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

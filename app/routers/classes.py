@@ -110,7 +110,7 @@ def enroll_siswa(
 @router.get("/{class_id}", response_model=ClassDetail, dependencies=[_admin_guru_siswa])
 def get_class(class_id: int, current_user: CurrentUser, session: SessionDep) -> ClassDetail:
     school_class = session.get(SchoolClass, class_id)
-    # Everyone is tenant-scoped here (no superadmin route to classes in Phase 1).
+    # Everyone is tenant-scoped here; class browsing is institution-local.
     if school_class is None or school_class.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kelas tidak ditemukan")
 

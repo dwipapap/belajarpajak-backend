@@ -29,7 +29,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Simulator Pajak — API",
         version="0.1.0",
-        description="Phase 1 foundation: auth, tenancy, RBAC, dashboards.",
+        description="Multi-tenant tax administration learning simulator API.",
         lifespan=lifespan,
     )
 

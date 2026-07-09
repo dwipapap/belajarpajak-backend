@@ -1,6 +1,6 @@
 """merge bp21/bp26 tables into one withholding_slips table
 
-BP21 and BP26 are the same Coretax e-Bupot form with different data values;
+BP21 and BP26 share one simulated e-Bupot form with different data values;
 slip_type discriminates. Rows are copied over with fresh ids (old ids remain
 embedded in already-issued withholding_number strings — cosmetic only).
 
