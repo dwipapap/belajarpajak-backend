@@ -1,0 +1,23 @@
+name: pajak-simulator
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pajaksim-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pajaksim
+      POSTGRES_PASSWORD: pajaksim_dev
+      POSTGRES_DB: pajaksim
+    ports:
+      - "5432:5432"
+    volumes:
+      - pajaksim_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pajaksim -d pajaksim"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pajaksim_pgdata:

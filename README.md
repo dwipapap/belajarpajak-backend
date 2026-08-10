@@ -7,7 +7,9 @@ The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nux
 ## Tech stack
 
 - Python 3.12+ · FastAPI · SQLModel · Alembic · uv
-- PostgreSQL ≥ 14 (existing local install via Laragon — not managed by this repo)
+- PostgreSQL ≥ 14, provided via:
+  - **Windows**: existing local install (e.g. via Laragon — not managed by this repo), **or**
+  - **Linux / WSL**: Docker Compose (`docker-compose.yml` included in this repo)
 - JWT (access + refresh) with `pyjwt`, password hashing with `passlib[bcrypt]`
 
 ## Current module coverage
@@ -21,9 +23,23 @@ The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nux
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (`pip install uv` or the standalone installer; ensure `uv` is on PATH)
-- A running local PostgreSQL (e.g. via Laragon)
+- A running local PostgreSQL ≥ 14:
+  - **Linux / WSL**: Docker & Docker Compose (the included `docker-compose.yml` provisions PostgreSQL 16)
+  - **Windows**: an existing local install (e.g. via Laragon) — not managed by this repo
 
 ## One-time database bootstrap
+
+### Option A — Linux / WSL (Docker Compose)
+
+From the repo root, start the PostgreSQL container:
+
+```bash
+docker compose up -d
+```
+
+This provisions a `pajaksim` database owned by the `pajaksim` role, reachable at `localhost:5432`. The container is configured with a health check and `restart: unless-stopped`.
+
+### Option B — Windows (Laragon / manual install)
 
 Run `psql` from your Postgres `bin` directory (Laragon: `C:\laragon\bin\postgresql\postgresql\bin`) as the `postgres` user:
 
@@ -34,8 +50,8 @@ CREATE DATABASE pajaksim OWNER pajaksim;
 
 ## Configuration
 
-```powershell
-Copy-Item .env.example .env
+```bash
+cp .env.example .env
 ```
 
 The connection string lives ONLY in `.env`:
@@ -49,9 +65,9 @@ If your Postgres runs on a non-default port, edit `.env` — nothing else change
 
 Production must set `APP_ENV=production`, replace `SECRET_KEY` with a random secret, and set `AUTO_SEED=false`. The app refuses to start with unsafe production defaults.
 
-## Run (PowerShell, from the repo root)
+## Run (from the repo root)
 
-```powershell
+```bash
 uv sync
 uv run alembic upgrade head
 uv run python -m app.seed
@@ -88,19 +104,33 @@ Tenants: **SMK Negeri 1 Pekanbaru** (`smkn1-pku`) and **Politeknik Caltex Riau**
 
 ## Tests & lint
 
-```powershell
+```bash
 uv run ruff check .
-uv run pytest
 ```
 
-Tests require a dedicated Postgres database in `DATABASE_URL` (no sqlite fallback, per spec). The database name must clearly indicate a test database, for example `pajaksim_test`; otherwise the suite **skips** instead of mutating a development database. If the test database is unreachable the suite also skips with an explanatory message.
+Tests require a dedicated Postgres database whose name clearly indicates a test database (e.g. `pajaksim_test`); otherwise the suite **skips** instead of mutating a development database. Create the test database once, apply migrations to it, then run the suite with `DATABASE_URL` pointed at it:
+
+```bash
+# Create the test database (one-time)
+docker compose exec -T db psql -U pajaksim -c "CREATE DATABASE pajaksim_test OWNER pajaksim;"
+
+# Apply migrations to the test database (one-time / after new migrations)
+DATABASE_URL="postgresql+psycopg://pajaksim:pajaksim_dev@localhost:5432/pajaksim_test" \
+  uv run alembic upgrade head
+
+# Run the test suite against the test database
+DATABASE_URL="postgresql+psycopg://pajaksim:pajaksim_dev@localhost:5432/pajaksim_test" \
+  uv run pytest
+```
+
+If the test database is unreachable the suite skips with an explanatory message.
 
 ## Implementation notes / resolutions
 
 - **bcrypt pinned `<4.1`**: passlib 1.7.4 reads `bcrypt.__about__.__version__`, which bcrypt 4.1+ removed. Hashing works either way; the pin silences a noisy startup warning.
 - **Email validation**: request schemas use a lightweight pattern instead of `EmailStr`, because the RFC validator rejects reserved TLDs like `.local` used by the (deliberately non-routable) seed accounts.
 - **Token storage tradeoff**: the frontend keeps the access token in memory and the refresh token in `localStorage`. Acceptable for current development; revisit (httpOnly cookies) before production.
-- **Docker deliberately deferred** to the deployment phase — dev is Windows-native against Laragon's Postgres.
+- **Dev environment**: Linux/WSL dev runs PostgreSQL via the included `docker-compose.yml`. Windows dev may use Laragon's existing PostgreSQL install or Docker Desktop with the same compose file.
 
 ## Simulated e-Bupot modules
 
