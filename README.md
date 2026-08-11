@@ -4,6 +4,9 @@ FastAPI + SQLModel backend for a multi-tenant **tax administration learning simu
 
 The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nuxt + Nuxt UI).
 
+> **New here?** Read [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) — full architecture,
+> data model, RBAC rules, API reference, tax calculation engine, and conventions.
+
 ## Tech stack
 
 - Python 3.12+ · FastAPI · SQLModel · Alembic · uv

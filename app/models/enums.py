@@ -22,6 +22,7 @@ class SlipType(StrEnum):
     """e-Bupot form type. All types share one table, lifecycle, and feature set."""
 
     bp21 = "bp21"
+    bp23 = "bp23"
     bp26 = "bp26"
 
 

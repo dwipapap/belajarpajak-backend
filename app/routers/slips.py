@@ -186,6 +186,7 @@ def _resolve_income_tax(
     tax_year: int,
     negara_treaty: str | None,
     tarif_treaty_basis_points: int | None,
+    recipient_identity_number: str | None,
 ) -> int:
     if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
         return 0
@@ -208,7 +209,13 @@ def _resolve_income_tax(
     ):
         return _tax_by_basis_points(dpp, tarif_treaty_basis_points)
 
-    return calculate_income_tax(dpp, rate_basis_points, tax_facility)
+    final_rate_basis_points = rate_basis_points
+    if slip_type == SlipType.bp23 and (
+        not recipient_identity_number or recipient_identity_number.startswith("0000000000000000")
+    ):
+        final_rate_basis_points *= 2
+
+    return calculate_income_tax(dpp, final_rate_basis_points, tax_facility)
 
 
 # --- shared access / lifecycle helpers ---------------------------------------
@@ -415,6 +422,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                 tax_year=data.tax_year,
                 negara_treaty=data.negara_treaty,
                 tarif_treaty_basis_points=data.tarif_treaty_basis_points,
+                recipient_identity_number=data.recipient_identity_number,
             ),
         )
 
@@ -779,6 +787,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             tax_year=slip.tax_year,
             negara_treaty=slip.negara_treaty,
             tarif_treaty_basis_points=slip.tarif_treaty_basis_points,
+            recipient_identity_number=slip.recipient_identity_number,
         )
         session.add(slip)
         session.commit()
@@ -875,4 +884,5 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
 
 
 bp21_router = make_slip_router(SlipType.bp21, "BP21")
+bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
