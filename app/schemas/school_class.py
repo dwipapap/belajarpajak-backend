@@ -19,12 +19,12 @@ class ClassRead(BaseModel):
     name: str
     academic_year: str
     guru_id: int
+    guru: UserRead | None = None
 
     model_config = {"from_attributes": True}
 
 
 class ClassDetail(ClassRead):
-    guru: UserRead | None = None
     students: list[UserRead] = []
 
 

@@ -30,7 +30,7 @@ def _enrolled_students(session: SessionDep, class_id: int) -> list[User]:
 
 
 @router.get("", response_model=list[ClassRead], dependencies=[_admin_guru_siswa])
-def list_classes(current_user: CurrentUser, session: SessionDep) -> list[SchoolClass]:
+def list_classes(current_user: CurrentUser, session: SessionDep) -> list[ClassRead]:
     """Admin: all classes in tenant. Guru: own classes. Siswa: enrolled classes."""
     query = select(SchoolClass).where(SchoolClass.tenant_id == current_user.tenant_id)
     if current_user.role == Role.guru:
@@ -39,7 +39,22 @@ def list_classes(current_user: CurrentUser, session: SessionDep) -> list[SchoolC
         query = query.join(Enrollment, Enrollment.class_id == SchoolClass.id).where(
             Enrollment.siswa_id == current_user.id
         )
-    return session.exec(query.order_by(SchoolClass.id)).all()
+    
+    classes = session.exec(query.order_by(SchoolClass.id)).all()
+    results = []
+    for c in classes:
+        guru = session.get(User, c.guru_id)
+        results.append(
+            ClassRead(
+                id=c.id,
+                tenant_id=c.tenant_id,
+                name=c.name,
+                academic_year=c.academic_year,
+                guru_id=c.guru_id,
+                guru=UserRead.model_validate(guru) if guru else None,
+            )
+        )
+    return results
 
 
 @router.post(
