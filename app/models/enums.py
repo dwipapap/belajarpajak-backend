@@ -44,6 +44,42 @@ class SlipTaxFacility(StrEnum):
     rate_0 = "rate_0"
 
 
+class TaxInvoiceStatus(StrEnum):
+    """Faktur pajak lifecycle.
+
+    Deliberately the same three values as ``SlipStatus`` so the frontend reuses
+    one status label/colour map across every document module.
+    """
+
+    draft = "draft"
+    issued = "issued"
+    invalid = "invalid"
+
+
+class TaxInvoiceKind(StrEnum):
+    """Jenis Faktur."""
+
+    normal = "normal"
+    pengganti = "pengganti"
+    dibatalkan = "dibatalkan"
+
+
+class TaxInvoiceLineType(StrEnum):
+    """Tipe Transaksi on a Detail Transaksi line."""
+
+    barang = "barang"
+    jasa = "jasa"
+
+
+class BuyerIdentityType(StrEnum):
+    """Which identity document the buyer is identified by."""
+
+    npwp = "npwp"
+    nik = "nik"
+    paspor = "paspor"
+    identitas_lain = "identitas_lain"
+
+
 class SlipSptFlag(StrEnum):
     """Issued-only lifecycle flags for the 'Telah Terbit' filters."""
 
