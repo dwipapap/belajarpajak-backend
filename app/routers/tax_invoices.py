@@ -12,17 +12,19 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import text as sa_text
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.money import apply_basis_points, basis_points_to_percent, percent_to_basis_points
 from app.core.scope import resolve_document_scope
-from app.models.enums import Role, TaxInvoiceKind, TaxInvoiceStatus
+from app.models.enums import BuyerIdentityType, Role, TaxInvoiceKind, TaxInvoiceStatus
 from app.models.school_class import SchoolClass
 from app.models.tax_invoice import TaxInvoice, TaxInvoiceLine
 from app.models.user import User
@@ -70,13 +72,16 @@ router = APIRouter(prefix="/faktur-keluaran", tags=["faktur-keluaran"])
 
 _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
 _review_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru))
+# Membatalkan dokumen adalah tindakan penjual (tenant) — siswa dan guru hanya
+# meninjau; hanya admin/superadmin tenant yang boleh membatalkan.
+_cancel_roles = Depends(require_roles(Role.superadmin, Role.admin))
 
 
 # --- tax engine ---------------------------------------------------------------
 
 
-def quantity_to_milli(quantity: float) -> int:
-    value = Decimal(str(quantity)) * Decimal("1000")
+def quantity_to_milli(quantity: Decimal) -> int:
+    value = quantity * Decimal("1000")
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
@@ -146,14 +151,21 @@ def generate_invoice_number(session: Session, invoice: TaxInvoice) -> str:
     """16-digit Nomor Faktur: kode transaksi + status + 000 + YY + 8-digit serial.
 
     The serial runs per tenant per tax year — as in the real system, numbering
-    belongs to the taxpayer, so two tenants both start at 1. A concurrent issue
-    could pick the same serial; the (tenant_id, invoice_number) unique
-    constraint is what actually guarantees uniqueness, which is proportionate
-    for a learning simulator.
+    belongs to the taxpayer, so two tenants both start at 1. A PostgreSQL
+    transaction-level advisory lock keyed on ``(tenant_id, tax_year)`` serialises
+    concurrent issues for the same taxpayer + period, so ``MAX(serial) + 1`` is
+    computed while no peer can race. The lock auto-releases on commit/rollback.
+    The (tenant_id, invoice_number) unique constraint stays as a final backstop;
+    callers translate any IntegrityError into a 409.
     """
     status_digit = "1" if invoice.invoice_kind == TaxInvoiceKind.pengganti else "0"
     year_suffix = f"{invoice.tax_year % 100:02d}"
     prefix = f"{invoice.transaction_code}{status_digit}000{year_suffix}"
+
+    session.execute(
+        sa_text("SELECT pg_advisory_xact_lock(:key1, :key2)"),
+        {"key1": invoice.tenant_id, "key2": 10_000_000 + invoice.tax_year},
+    )
 
     used = session.exec(
         select(TaxInvoice.invoice_number).where(
@@ -245,6 +257,65 @@ def _require_draft(invoice: TaxInvoice, action: str) -> None:
         )
 
 
+def _validate_tax_period(invoice_date: date, tax_month: int, tax_year: int) -> None:
+    """Tanggal Faktur must fall inside the chosen Masa Pajak / Tahun Pajak."""
+    if invoice_date.month != tax_month or invoice_date.year != tax_year:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Tanggal faktur harus sesuai dengan masa pajak yang dipilih",
+        )
+
+
+def _reject_pengganti(kind: TaxInvoiceKind) -> None:
+    """Jenis faktur pengganti is not implemented yet — keep it disabled."""
+    if kind == TaxInvoiceKind.pengganti:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Jenis faktur pengganti belum didukung",
+        )
+
+
+def _validate_identity(
+    identity_type: BuyerIdentityType,
+    identity_number: str | None,
+    document_number: str | None,
+) -> None:
+    """Simulator identity rules for the pembeli.
+
+    - NPWP: numeric (15–16 digits, separators allowed).
+    - NIK: exactly 16 digits.
+    - Paspor / Identitas Lain: both an identity number and a document number.
+    These are the server-side authority; the frontend merely mirrors them for UX.
+    """
+    number = (identity_number or "").strip()
+    doc = (document_number or "").strip()
+
+    if identity_type == BuyerIdentityType.nik:
+        if not number.isdigit() or len(number) != 16:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="NIK harus 16 digit angka",
+            )
+    elif identity_type == BuyerIdentityType.npwp:
+        cleaned = number.replace(".", "").replace("-", "")
+        if not cleaned or not cleaned.isdigit() or not (15 <= len(cleaned) <= 16):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Nomor NPWP tidak valid",
+            )
+    else:  # paspor / identitas_lain
+        if not number:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Nomor identitas wajib diisi untuk paspor/identitas lain",
+            )
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Nomor dokumen wajib diisi untuk paspor/identitas lain",
+            )
+
+
 def issue_invoice(session: Session, invoice: TaxInvoice) -> None:
     invoice.status = TaxInvoiceStatus.issued
     invoice.issued_at = datetime.now(UTC)
@@ -261,6 +332,46 @@ def _replace_lines(
     for order, line_data in enumerate(lines):
         session.add(build_line(line_data, invoice_id=invoice.id, line_order=order))
     session.flush()
+
+
+def _invoice_conditions(
+    *,
+    status: TaxInvoiceStatus | None = None,
+    tenant_id: int | None = None,
+    class_id: int | None = None,
+    siswa_id: int | None = None,
+    tax_year: int | None = None,
+    tax_month: int | None = None,
+    transaction_code: str | None = None,
+    buyer_name: str | None = None,
+    buyer_identity_number: str | None = None,
+    current_user: User,
+) -> list:
+    """Shared filter builder for the list view and the CSV export.
+
+    Keeping list and export on one builder means an export can never diverge
+    from what the user sees, and tenant/class/student scoping stays server-side.
+    """
+    conditions = []
+    if status is not None:
+        conditions.append(TaxInvoice.status == status)
+    if tax_year is not None:
+        conditions.append(TaxInvoice.tax_year == tax_year)
+    if tax_month is not None:
+        conditions.append(TaxInvoice.tax_month == tax_month)
+    if transaction_code is not None:
+        conditions.append(TaxInvoice.transaction_code == transaction_code)
+    if buyer_name:
+        conditions.append(TaxInvoice.buyer_name.ilike(f"%{buyer_name}%"))
+    if buyer_identity_number:
+        conditions.append(TaxInvoice.buyer_identity_number.ilike(f"%{buyer_identity_number}%"))
+    if current_user.role == Role.superadmin and tenant_id is not None:
+        conditions.append(TaxInvoice.tenant_id == tenant_id)
+    if class_id is not None:
+        conditions.append(TaxInvoice.class_id == class_id)
+    if siswa_id is not None and current_user.role != Role.siswa:
+        conditions.append(TaxInvoice.siswa_id == siswa_id)
+    return conditions
 
 
 # --- endpoints ----------------------------------------------------------------
@@ -282,25 +393,18 @@ def list_invoices(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> TaxInvoiceListResponse:
-    conditions = []
-    if status_filter is not None:
-        conditions.append(TaxInvoice.status == status_filter)
-    if tax_year is not None:
-        conditions.append(TaxInvoice.tax_year == tax_year)
-    if tax_month is not None:
-        conditions.append(TaxInvoice.tax_month == tax_month)
-    if transaction_code is not None:
-        conditions.append(TaxInvoice.transaction_code == transaction_code)
-    if buyer_name:
-        conditions.append(TaxInvoice.buyer_name.ilike(f"%{buyer_name}%"))
-    if buyer_identity_number:
-        conditions.append(TaxInvoice.buyer_identity_number.ilike(f"%{buyer_identity_number}%"))
-    if current_user.role == Role.superadmin and tenant_id is not None:
-        conditions.append(TaxInvoice.tenant_id == tenant_id)
-    if class_id is not None:
-        conditions.append(TaxInvoice.class_id == class_id)
-    if siswa_id is not None and current_user.role != Role.siswa:
-        conditions.append(TaxInvoice.siswa_id == siswa_id)
+    conditions = _invoice_conditions(
+        status=status_filter,
+        tenant_id=tenant_id,
+        class_id=class_id,
+        siswa_id=siswa_id,
+        tax_year=tax_year,
+        tax_month=tax_month,
+        transaction_code=transaction_code,
+        buyer_name=buyer_name,
+        buyer_identity_number=buyer_identity_number,
+        current_user=current_user,
+    )
 
     total = session.exec(
         apply_access_filters(
@@ -345,17 +449,32 @@ def export_csv(
     current_user: CurrentUser,
     session: SessionDep,
     status_filter: Annotated[TaxInvoiceStatus | None, Query(alias="status")] = None,
+    tenant_id: int | None = None,
+    class_id: int | None = None,
+    siswa_id: int | None = None,
     tax_year: Annotated[int | None, Query(ge=2020, le=2100)] = None,
     tax_month: Annotated[int | None, Query(ge=1, le=12)] = None,
+    transaction_code: Annotated[str | None, Query(pattern=r"^(0[1-9]|10)$")] = None,
+    buyer_name: str | None = None,
+    buyer_identity_number: str | None = None,
 ) -> Response:
-    """Download CSV — columns follow the Pajak Keluaran list view."""
-    conditions = []
-    if status_filter is not None:
-        conditions.append(TaxInvoice.status == status_filter)
-    if tax_year is not None:
-        conditions.append(TaxInvoice.tax_year == tax_year)
-    if tax_month is not None:
-        conditions.append(TaxInvoice.tax_month == tax_month)
+    """Download CSV — same filters as the list view, driven by the same builder.
+
+    Server-side tenant/class/student scoping stays intact, so an export can
+    never leak data from outside the caller's scope.
+    """
+    conditions = _invoice_conditions(
+        status=status_filter,
+        tenant_id=tenant_id,
+        class_id=class_id,
+        siswa_id=siswa_id,
+        tax_year=tax_year,
+        tax_month=tax_month,
+        transaction_code=transaction_code,
+        buyer_name=buyer_name,
+        buyer_identity_number=buyer_identity_number,
+        current_user=current_user,
+    )
 
     total = session.exec(
         apply_access_filters(
@@ -419,6 +538,11 @@ def create_invoice(
         siswa_id=data.siswa_id,
         label=LABEL,
     )
+    _reject_pengganti(data.invoice_kind)
+    _validate_tax_period(data.invoice_date, data.tax_month, data.tax_year)
+    _validate_identity(
+        data.buyer_identity_type, data.buyer_identity_number, data.buyer_document_number
+    )
     payload = data.model_dump(exclude={"class_id", "siswa_id", "lines"})
     invoice = TaxInvoice(
         **payload,
@@ -435,7 +559,14 @@ def create_invoice(
     session.flush()
 
     recalculate_invoice(session, invoice)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Terjadi benturan data, silakan coba lagi",
+        ) from exc
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
 
@@ -444,26 +575,37 @@ def create_invoice(
 def bulk_issue(
     data: TaxInvoiceBulkIssue, current_user: CurrentUser, session: SessionDep
 ) -> TaxInvoiceBulkIssueResult:
-    """Upload Faktur — issue many drafts at once."""
+    """Upload Faktur — issue many drafts at once (partial success).
+
+    Each id is processed independently: an invalid or inaccessible id, a
+    non-draft, a draft without lines, or a numbering conflict only marks that
+    item as failed while the rest still go through. The session is rolled back
+    after any per-item error so a bad row can never poison the remainder.
+    """
     result = TaxInvoiceBulkIssueResult()
     for invoice_id in data.ids:
-        invoice = session.get(TaxInvoice, invoice_id)
-        if invoice is None or not can_read_invoice(session, current_user, invoice):
+        try:
+            invoice = session.get(TaxInvoice, invoice_id)
+            if invoice is None or not can_read_invoice(session, current_user, invoice):
+                result.skipped += 1
+                result.errors.append(f"#{invoice_id}: {LABEL} tidak ditemukan")
+                continue
+            if invoice.status != TaxInvoiceStatus.draft:
+                result.skipped += 1
+                result.errors.append(f"#{invoice_id}: bukan draft")
+                continue
+            if not _invoice_lines(session, invoice.id):
+                result.skipped += 1
+                result.errors.append(f"#{invoice_id}: belum ada detail transaksi")
+                continue
+            issue_invoice(session, invoice)
+            session.add(invoice)
+            session.commit()
+            result.issued += 1
+        except IntegrityError:
+            session.rollback()
             result.skipped += 1
-            result.errors.append(f"#{invoice_id}: {LABEL} tidak ditemukan")
-            continue
-        if invoice.status != TaxInvoiceStatus.draft:
-            result.skipped += 1
-            result.errors.append(f"#{invoice_id}: bukan draft")
-            continue
-        if not _invoice_lines(session, invoice.id):
-            result.skipped += 1
-            result.errors.append(f"#{invoice_id}: belum ada detail transaksi")
-            continue
-        issue_invoice(session, invoice)
-        session.add(invoice)
-        session.commit()
-        result.issued += 1
+            result.errors.append(f"#{invoice_id}: nomor faktur bentrok, coba lagi")
     return result
 
 
@@ -500,11 +642,26 @@ def update_invoice(
             continue
         setattr(invoice, field, value)
 
+    _reject_pengganti(invoice.invoice_kind)
+    _validate_tax_period(invoice.invoice_date, invoice.tax_month, invoice.tax_year)
+    _validate_identity(
+        invoice.buyer_identity_type,
+        invoice.buyer_identity_number,
+        invoice.buyer_document_number,
+    )
+
     if lines is not None:
         _replace_lines(session, invoice, [TaxInvoiceLineCreate.model_validate(x) for x in lines])
 
     recalculate_invoice(session, invoice)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Terjadi benturan data, silakan coba lagi",
+        ) from exc
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
 
@@ -530,12 +687,19 @@ def issue(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> Ta
         )
     issue_invoice(session, invoice)
     session.add(invoice)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Nomor faktur bentrok, silakan coba lagi",
+        ) from exc
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
 
 
-@router.post("/{invoice_id}/cancel", response_model=TaxInvoiceRead, dependencies=[_roles])
+@router.post("/{invoice_id}/cancel", response_model=TaxInvoiceRead, dependencies=[_cancel_roles])
 def cancel(
     invoice_id: int, data: TaxInvoiceCancel, current_user: CurrentUser, session: SessionDep
 ) -> TaxInvoiceRead:
