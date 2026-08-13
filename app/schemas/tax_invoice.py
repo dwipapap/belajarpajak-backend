@@ -9,8 +9,9 @@ a faktur whose arithmetic disagrees with the tax rules being taught.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import (
     BuyerIdentityType,
@@ -43,12 +44,19 @@ class TaxInvoiceLineBase(BaseModel):
     unit: str = Field(min_length=1, max_length=40)
 
     unit_price: int = Field(default=0, ge=0)
-    quantity: float = Field(default=1, ge=0)
+    quantity: Decimal = Field(default=Decimal("1"), ge=0)
     discount: int = Field(default=0, ge=0)
 
     use_dpp_other: bool = False
     ppn_rate_percent: float = Field(default=12, ge=0, le=100)
     ppnbm_rate_percent: float = Field(default=0, ge=0, le=100)
+
+    @field_validator("quantity")
+    @classmethod
+    def _reject_quantity_beyond_3_decimals(cls, v: Decimal) -> Decimal:
+        if v.as_tuple().exponent < -3:
+            raise ValueError("Kuantitas maksimal 3 digit pecahan")
+        return v
 
 
 class TaxInvoiceLineCreate(TaxInvoiceLineBase):
@@ -61,11 +69,18 @@ class TaxInvoiceLineUpdate(BaseModel):
     item_name: str | None = Field(default=None, min_length=1, max_length=255)
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     unit_price: int | None = Field(default=None, ge=0)
-    quantity: float | None = Field(default=None, ge=0)
+    quantity: Decimal | None = Field(default=None, ge=0)
     discount: int | None = Field(default=None, ge=0)
     use_dpp_other: bool | None = None
     ppn_rate_percent: float | None = Field(default=None, ge=0, le=100)
     ppnbm_rate_percent: float | None = Field(default=None, ge=0, le=100)
+
+    @field_validator("quantity")
+    @classmethod
+    def _reject_quantity_beyond_3_decimals(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v.as_tuple().exponent < -3:
+            raise ValueError("Kuantitas maksimal 3 digit pecahan")
+        return v
 
 
 class TaxInvoiceLineRead(BaseModel):
