@@ -7,6 +7,8 @@ Safe to re-run: every insert is guarded by an existence check.
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlmodel import Session, func, select
 
 from app.core.security import hash_password
@@ -15,8 +17,11 @@ from app.models.enrollment import Enrollment
 from app.models.enums import Role, TenantType
 from app.models.school_class import SchoolClass
 from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
+from app.models.tax_invoice import TaxInvoice
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.routers.tax_invoices import build_line, issue_invoice, recalculate_invoice
+from app.schemas.tax_invoice import TaxInvoiceLineCreate
 
 SEED_PASSWORD = "Password123!"
 TARIF_YEARS = (2024, 2025, 2026)
@@ -141,6 +146,7 @@ def seed(session: Session) -> list[dict]:
             ("XII Akuntansi 1", gurus[0], siswa_list[0:3]),
             ("XII Akuntansi 2", gurus[1], siswa_list[3:6]),
         ]
+        first_class: SchoolClass | None = None
         for name, guru, members in class_specs:
             school_class = session.exec(
                 select(SchoolClass).where(
@@ -156,6 +162,8 @@ def seed(session: Session) -> list[dict]:
                 )
                 session.add(school_class)
                 session.flush()
+            if first_class is None:
+                first_class = school_class
             for siswa in members:
                 exists = session.exec(
                     select(Enrollment).where(
@@ -165,6 +173,10 @@ def seed(session: Session) -> list[dict]:
                 ).first()
                 if exists is None:
                     session.add(Enrollment(class_id=school_class.id, siswa_id=siswa.id))
+
+        seed_faktur_examples(
+            session, tenant=tenant, siswa=siswa_list[0], school_class=first_class
+        )
 
     seed_tarif_pajak(session)
     session.commit()
@@ -181,6 +193,130 @@ def _print_credentials(credentials: list[dict]) -> None:
     for row in credentials:
         print(f"{row['tenant']:<12} {row['role']:<12} {row['email']}")
     print("=" * 60 + "\n")
+
+
+#: Two sample faktur keluaran per tenant so the Pajak Keluaran list is not empty
+#: on first login: one draft to open and edit, one already issued.
+FAKTUR_EXAMPLES: tuple[dict, ...] = (
+    {
+        "reference": "Contoh faktur draft",
+        "transaction_code": "01",
+        "buyer_identity_number": "0013457668062000",
+        "buyer_name": "PT MITRA NIAGA SIMULASI",
+        "buyer_address": "JL POS PENGUMBEN RAYA NO.8, JAKARTA BARAT",
+        "issue": False,
+        "lines": [
+            {
+                "line_type": "jasa",
+                "item_code": "060000",
+                "item_name": "Biaya Kirim Barang",
+                "unit": "Bulan",
+                "unit_price": 2_500_000,
+                "quantity": 1,
+            }
+        ],
+    },
+    {
+        "reference": "Contoh faktur telah terbit",
+        "transaction_code": "05",
+        "buyer_identity_number": "0987654321098000",
+        "buyer_name": "CV KARYA BERSAMA SIMULASI",
+        "buyer_address": "JL ARIFIN AHMAD NO.102, PEKANBARU",
+        "issue": True,
+        "lines": [
+            {
+                "line_type": "barang",
+                "item_code": "010000",
+                "item_name": "Alat Tulis Kantor",
+                "unit": "Paket",
+                "unit_price": 750_000,
+                "quantity": 4,
+            },
+            {
+                "line_type": "jasa",
+                "item_code": "060000",
+                "item_name": "Jasa Bongkar Muat",
+                "unit": "Unit",
+                "unit_price": 300_000,
+                "quantity": 2,
+            },
+        ],
+    },
+)
+
+
+def seed_faktur_examples(
+    session: Session,
+    *,
+    tenant: Tenant,
+    siswa: User,
+    school_class: SchoolClass | None,
+) -> None:
+    """Create the sample Pajak Keluaran rows, keyed by reference so re-runs are safe."""
+    for spec in FAKTUR_EXAMPLES:
+        exists = session.exec(
+            select(TaxInvoice).where(
+                TaxInvoice.tenant_id == tenant.id,
+                TaxInvoice.siswa_id == siswa.id,
+                TaxInvoice.reference == spec["reference"],
+            )
+        ).first()
+        if exists is not None:
+            continue
+
+        invoice = TaxInvoice(
+            tenant_id=tenant.id,
+            class_id=school_class.id if school_class else None,
+            siswa_id=siswa.id,
+            created_by_id=siswa.id,
+            transaction_code=spec["transaction_code"],
+            invoice_date=date(2026, 7, 18),
+            tax_month=7,
+            tax_year=2026,
+            reference=spec["reference"],
+            seller_npwp="1471110802000001",
+            seller_name=tenant.name,
+            seller_address="JALAN ARIFIN AHMAD NO.102, PEKANBARU",
+            seller_idtku="000000",
+            buyer_identity_number=spec["buyer_identity_number"],
+            buyer_name=spec["buyer_name"],
+            buyer_address=spec["buyer_address"],
+            buyer_idtku="000000",
+        )
+        session.add(invoice)
+        session.flush()
+
+        for order, line_spec in enumerate(spec["lines"]):
+            session.add(
+                build_line(
+                    TaxInvoiceLineCreate.model_validate(line_spec),
+                    invoice_id=invoice.id,
+                    line_order=order,
+                )
+            )
+        session.flush()
+        recalculate_invoice(session, invoice)
+
+        if spec["issue"]:
+            issue_invoice(session, invoice)
+            session.add(invoice)
+        session.flush()
+
+
+def seed_faktur_for_all_tenants(session: Session) -> None:
+    """Ensure the sample faktur exist on an already-seeded database."""
+    for tenant in session.exec(select(Tenant)).all():
+        siswa = session.exec(
+            select(User)
+            .where(User.tenant_id == tenant.id, User.role == Role.siswa)
+            .order_by(User.id)
+        ).first()
+        if siswa is None:
+            continue
+        school_class = session.exec(
+            select(SchoolClass).where(SchoolClass.tenant_id == tenant.id).order_by(SchoolClass.id)
+        ).first()
+        seed_faktur_examples(session, tenant=tenant, siswa=siswa, school_class=school_class)
 
 
 def seed_tarif_pajak(session: Session) -> None:
@@ -225,6 +361,7 @@ def seed_if_empty() -> None:
         user_count = session.exec(select(func.count()).select_from(User)).one()
         if user_count > 0:
             seed_tarif_pajak(session)
+            seed_faktur_for_all_tenants(session)
             session.commit()
             return
         credentials = seed(session)
