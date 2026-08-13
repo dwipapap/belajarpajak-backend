@@ -1,10 +1,19 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session as ModelSession
+from sqlmodel import select
 
+from app.db import engine
+from app.models.school_class import SchoolClass
+from app.models.user import User
 from tests.conftest import auth_headers
 
 SISWA = "siswa1@smkn1-pku.local"
 OTHER_SISWA = "siswa4@smkn1-pku.local"
 GURU = "guru1@smkn1-pku.local"
+ADMIN = "admin@smkn1-pku.local"
+SUPERADMIN = "super@pajaksim.local"
+PCR_ADMIN = "admin@pcr.local"
 
 
 def _line(**overrides) -> dict:
@@ -161,20 +170,55 @@ def test_delete_only_allowed_while_draft(client: TestClient):
 
 
 def test_cancel_marks_issued_invoice_invalid(client: TestClient):
-    headers = auth_headers(client, SISWA)
-    created = _create(client, headers)
-    client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=headers)
+    """Only admin/superadmin may cancel; the issued faktur becomes Tidak Valid."""
+    siswa_headers = auth_headers(client, SISWA)
+    created = _create(client, siswa_headers)
+    client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=siswa_headers)
+
+    for role_headers in (auth_headers(client, SISWA), auth_headers(client, GURU)):
+        denied = client.post(
+            f"/api/v1/faktur-keluaran/{created['id']}/cancel",
+            json={"reason": "Salah input pembeli"},
+            headers=role_headers,
+        )
+        assert denied.status_code == 403
 
     res = client.post(
         f"/api/v1/faktur-keluaran/{created['id']}/cancel",
         json={"reason": "Salah input pembeli"},
-        headers=headers,
+        headers=auth_headers(client, ADMIN),
     )
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "invalid"
     assert data["invoice_kind"] == "dibatalkan"
     assert data["invalid_reason"] == "Salah input pembeli"
+
+
+def test_cancel_role_matrix(client: TestClient):
+    """siswa and guru may never cancel; admin and superadmin may."""
+    base_headers = auth_headers(client, SISWA)
+
+    def _issued():
+        created = _create(client, base_headers)
+        client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=base_headers)
+        return created["id"]
+
+    for email in (SISWA, GURU):
+        res = client.post(
+            f"/api/v1/faktur-keluaran/{_issued()}/cancel",
+            json={"reason": "x"},
+            headers=auth_headers(client, email),
+        )
+        assert res.status_code == 403
+
+    for email in (ADMIN, SUPERADMIN):
+        res = client.post(
+            f"/api/v1/faktur-keluaran/{_issued()}/cancel",
+            json={"reason": "x"},
+            headers=auth_headers(client, email),
+        )
+        assert res.status_code == 200
 
 
 def test_lines_can_be_added_and_removed_with_totals_kept_in_sync(client: TestClient):
@@ -279,3 +323,248 @@ def test_invalid_transaction_code_is_rejected(client: TestClient):
         "/api/v1/faktur-keluaran", json=_payload(transaction_code="99"), headers=headers
     )
     assert res.status_code == 422
+
+
+# --- P0 fixes ---------------------------------------------------------------
+
+
+def test_tax_period_mismatch_is_422(client: TestClient):
+    """Tanggal Faktur must land in the chosen Masa Pajak / Tahun Pajak."""
+    headers = auth_headers(client, SISWA)
+    res = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(invoice_date="2026-07-18", tax_month=8, tax_year=2026),
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    ok = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(invoice_date="2026-07-18", tax_month=7, tax_year=2026),
+        headers=headers,
+    )
+    assert ok.status_code == 201
+
+
+def test_pengganti_kind_is_rejected(client: TestClient):
+    """Jenis faktur pengganti is disabled — create must reject it."""
+    headers = auth_headers(client, SISWA)
+    res = client.post(
+        "/api/v1/faktur-keluaran", json=_payload(invoice_kind="pengganti"), headers=headers
+    )
+    assert res.status_code == 422
+
+
+def test_issue_serials_are_unique_per_tenant_year(client: TestClient):
+    """Two issues in the same tenant + year get distinct 16-digit numbers."""
+    headers = auth_headers(client, SISWA)
+    first = _create(client, headers)
+    second = _create(client, headers)
+
+    n1 = client.post(
+        f"/api/v1/faktur-keluaran/{first['id']}/issue", headers=headers
+    ).json()["invoice_number"]
+    n2 = client.post(
+        f"/api/v1/faktur-keluaran/{second['id']}/issue", headers=headers
+    ).json()["invoice_number"]
+
+    assert n1 != n2
+    assert len(n1) == 16 and n1.isdigit()
+    assert len(n2) == 16 and n2.isdigit()
+
+
+def test_inaccessible_mutations_return_404(client: TestClient):
+    """Reads/writes on a faktur owned by another tenant user are hidden (404)."""
+    owner = auth_headers(client, SISWA)
+    created = _create(client, owner)
+
+    intruder = auth_headers(client, OTHER_SISWA)
+    # Reads/writes on another student's faktur are hidden (404 via _get_accessible_invoice).
+    patch = client.patch(
+        f"/api/v1/faktur-keluaran/{created['id']}", json={"buyer_name": "Hack"}, headers=intruder
+    )
+    assert patch.status_code == 404
+
+    delete = client.delete(f"/api/v1/faktur-keluaran/{created['id']}", headers=intruder)
+    assert delete.status_code == 404
+
+    issue = client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=intruder)
+    assert issue.status_code == 404
+
+    # cancel is role-gated (admin/superadmin), so a siswa intruder is refused 403.
+    res = client.post(
+        f"/api/v1/faktur-keluaran/{created['id']}/cancel", json={"reason": "x"}, headers=intruder
+    )
+    assert res.status_code == 403
+
+
+def test_bulk_issue_partial_success(client: TestClient):
+    """Invalid items are reported while the rest still get issued."""
+    headers = auth_headers(client, SISWA)
+    valid = _create(client, headers)
+    already = _create(client, headers)
+    no_lines = _create(client, headers, lines=[])
+
+    client.post(f"/api/v1/faktur-keluaran/{already['id']}/issue", headers=headers)
+
+    other_headers = auth_headers(client, OTHER_SISWA)
+    other = _create(client, other_headers)
+
+    res = client.post(
+        "/api/v1/faktur-keluaran/bulk-issue",
+        json={"ids": [valid["id"], already["id"], other["id"], no_lines["id"], 999_999]},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["issued"] == 1
+    assert data["skipped"] == 4
+    assert len(data["errors"]) == 4
+
+    state = client.get(f"/api/v1/faktur-keluaran/{valid['id']}", headers=headers).json()
+    assert state["status"] == "issued"
+
+
+# --- P1 fixes ---------------------------------------------------------------
+
+
+def test_quantity_accepts_up_to_3_decimals(client: TestClient):
+    headers = auth_headers(client, SISWA)
+    ok = _create(client, headers, lines=[_line(quantity=1.234)])
+    assert ok["lines"][0]["quantity"] == 1.234
+
+    ok001 = _create(client, headers, lines=[_line(quantity=0.001)])
+    assert ok001["lines"][0]["quantity"] == 0.001
+
+
+def test_quantity_rejects_more_than_3_decimals(client: TestClient):
+    headers = auth_headers(client, SISWA)
+    res = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(lines=[_line(quantity=1.2345)]),
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+
+def test_buyer_identity_validation(client: TestClient):
+    headers = auth_headers(client, SISWA)
+
+    # NIK must be exactly 16 digits.
+    res = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(buyer_identity_type="nik", buyer_identity_number="123456789012345"),
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    ok = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(buyer_identity_type="nik", buyer_identity_number="1234567890123456"),
+        headers=headers,
+    )
+    assert ok.status_code == 201
+
+    # NPWP must be 15-16 numeric digits.
+    res = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(buyer_identity_type="npwp", buyer_identity_number="not-a-npwp"),
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    # Paspor / Identitas Lain need both an identity number and a document number.
+    res = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(
+            buyer_identity_type="paspor",
+            buyer_identity_number="P123456",
+            buyer_document_number=None,
+        ),
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    ok = client.post(
+        "/api/v1/faktur-keluaran",
+        json=_payload(
+            buyer_identity_type="paspor",
+            buyer_identity_number="P123456",
+            buyer_document_number="DOC-001",
+        ),
+        headers=headers,
+    )
+    assert ok.status_code == 201
+
+
+def test_export_matches_list_filters_and_does_not_leak(client: TestClient):
+    """Export uses the same filter builder as the list and stays tenant-scoped."""
+    headers = auth_headers(client, SISWA)
+    _create(client, headers, transaction_code="07")
+
+    other_headers = auth_headers(client, OTHER_SISWA)
+    _create(client, other_headers, transaction_code="07", buyer_name="PT RAHASIA LAIN")
+
+    res = client.get(
+        "/api/v1/faktur-keluaran/export-csv?transaction_code=07", headers=headers
+    )
+    assert res.status_code == 200
+    # The other student's unique buyer name must not leak into this export.
+    assert "PT RAHASIA LAIN" not in res.text
+
+
+
+
+def test_admin_cannot_read_other_tenant_invoice(client: TestClient):
+    """An admin of a different tenant is hidden from another tenant's faktur."""
+    headers = auth_headers(client, SISWA)
+    created = _create(client, headers)
+
+    res = client.get(
+        f"/api/v1/faktur-keluaran/{created['id']}", headers=auth_headers(client, PCR_ADMIN)
+    )
+    assert res.status_code == 404
+
+
+def test_guru_cannot_move_invoice_to_class_not_owned(client: TestClient):
+    """A guru may only move a faktur between classes they teach."""
+    siswa_headers = auth_headers(client, SISWA)
+    my_class = client.get("/api/v1/classes", headers=siswa_headers).json()[0]["id"]
+    created = _create(client, siswa_headers, class_id=my_class)
+
+    guru_headers = auth_headers(client, GURU)
+    guru_id = client.get("/api/v1/auth/me", headers=guru_headers).json()["id"]
+
+    with ModelSession(engine) as session:
+        other_class = session.exec(
+            select(SchoolClass).where(
+                SchoolClass.tenant_id == created["tenant_id"],
+                SchoolClass.guru_id != guru_id,
+            )
+        ).first()
+    assert other_class is not None
+
+    res = client.patch(
+        f"/api/v1/faktur-keluaran/{created['id']}",
+        json={"class_id": other_class.id},
+        headers=guru_headers,
+    )
+    assert res.status_code == 403
+
+def test_deleting_user_with_invoices_is_rejected(client: TestClient):
+    """created_by_id uses ON DELETE RESTRICT, so invoicing history is preserved."""
+    headers = auth_headers(client, SISWA)
+    created = _create(client, headers)
+    siswa_id = created["siswa_id"]
+
+    with ModelSession(engine) as session:
+        user = session.get(User, siswa_id)
+        blocked = False
+        try:
+            session.delete(user)
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            blocked = True
+
+    assert blocked
