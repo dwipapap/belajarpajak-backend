@@ -261,7 +261,7 @@ def _validate_tax_period(invoice_date: date, tax_month: int, tax_year: int) -> N
     """Tanggal Faktur must fall inside the chosen Masa Pajak / Tahun Pajak."""
     if invoice_date.month != tax_month or invoice_date.year != tax_year:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Tanggal faktur harus sesuai dengan masa pajak yang dipilih",
         )
 
@@ -270,7 +270,7 @@ def _reject_pengganti(kind: TaxInvoiceKind) -> None:
     """Jenis faktur pengganti is not implemented yet — keep it disabled."""
     if kind == TaxInvoiceKind.pengganti:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Jenis faktur pengganti belum didukung",
         )
 
@@ -293,25 +293,25 @@ def _validate_identity(
     if identity_type == BuyerIdentityType.nik:
         if not number.isdigit() or len(number) != 16:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="NIK harus 16 digit angka",
             )
     elif identity_type == BuyerIdentityType.npwp:
         cleaned = number.replace(".", "").replace("-", "")
         if not cleaned or not cleaned.isdigit() or not (15 <= len(cleaned) <= 16):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Nomor NPWP tidak valid",
             )
     else:  # paspor / identitas_lain
         if not number:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Nomor identitas wajib diisi untuk paspor/identitas lain",
             )
         if not doc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Nomor dokumen wajib diisi untuk paspor/identitas lain",
             )
 
@@ -483,7 +483,7 @@ def export_csv(
     ).one()
     if total > MAX_EXPORT_ROWS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Terlalu banyak data untuk ekspor. Persempit filter masa pajak atau status.",
         )
 
