@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field
 
@@ -29,6 +29,11 @@ from app.models.enums import (
 
 class TaxInvoice(TimestampMixin, table=True):
     __tablename__ = "tax_invoices"
+    # Nomor Faktur serials run per taxpayer, so uniqueness is per tenant — two
+    # tenants legitimately both start at serial 1.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "invoice_number", name="uq_tax_invoices_tenant_number"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     tenant_id: int = Field(
@@ -51,7 +56,7 @@ class TaxInvoice(TimestampMixin, table=True):
             SAEnum(TaxInvoiceStatus, name="tax_invoice_status"), nullable=False, index=True
         ),
     )
-    invoice_number: str | None = Field(default=None, max_length=24, unique=True, index=True)
+    invoice_number: str | None = Field(default=None, max_length=24, index=True)
     issued_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     invalid_reason: str | None = Field(default=None, max_length=500)
     electronic_signature_status: str = Field(default="not_signed", max_length=40)
