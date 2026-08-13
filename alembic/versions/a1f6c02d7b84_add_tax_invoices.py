@@ -93,6 +93,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["siswa_id"], ["users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("tenant_id", "invoice_number", name="uq_tax_invoices_tenant_number"),
     )
     op.create_index(op.f("ix_tax_invoices_class_id"), "tax_invoices", ["class_id"])
     op.create_index(op.f("ix_tax_invoices_created_by_id"), "tax_invoices", ["created_by_id"])
@@ -102,9 +103,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_tax_invoices_tax_year"), "tax_invoices", ["tax_year"])
     op.create_index(op.f("ix_tax_invoices_tenant_id"), "tax_invoices", ["tenant_id"])
     op.create_index(op.f("ix_tax_invoices_transaction_code"), "tax_invoices", ["transaction_code"])
-    op.create_index(
-        op.f("ix_tax_invoices_invoice_number"), "tax_invoices", ["invoice_number"], unique=True
-    )
+    op.create_index(op.f("ix_tax_invoices_invoice_number"), "tax_invoices", ["invoice_number"])
 
     op.create_table(
         "tax_invoice_lines",

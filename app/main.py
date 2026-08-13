@@ -8,7 +8,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import auth, classes, dashboard, slips, tarif_pajak, tenants, users
+from app.routers import (
+    auth,
+    classes,
+    dashboard,
+    slips,
+    tarif_pajak,
+    tax_invoices,
+    tenants,
+    users,
+)
 
 API_PREFIX = "/api/v1"
 
@@ -49,6 +58,7 @@ def create_app() -> FastAPI:
         slips.bp21_router,
         slips.bp23_router,
         slips.bp26_router,
+        tax_invoices.router,
         tarif_pajak.router,
         dashboard.router,
     ):
