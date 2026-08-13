@@ -11,7 +11,6 @@ import csv
 import io
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
@@ -19,7 +18,8 @@ from pydantic import ValidationError
 from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
-from app.models.enrollment import Enrollment
+from app.core.money import apply_basis_points, basis_points_to_percent, percent_to_basis_points
+from app.core.scope import resolve_document_scope
 from app.models.enums import (
     Role,
     SlipSptFlag,
@@ -103,30 +103,18 @@ _CSV_COLUMNS = (
 # --- money math (basis points keep integer rupiah exact) ---------------------
 
 
-def percent_to_basis_points(percent: float) -> int:
-    rate = Decimal(str(percent))
-    return int((rate * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
-def basis_points_to_percent(basis_points: int) -> float:
-    return float((Decimal(basis_points) / Decimal("100")).quantize(Decimal("0.01")))
-
-
 def calculate_dpp(gross_income: int, dpp_rate_basis_points: int) -> int:
-    value = Decimal(gross_income) * Decimal(dpp_rate_basis_points) / Decimal("10000")
-    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return apply_basis_points(gross_income, dpp_rate_basis_points)
 
 
 def calculate_income_tax(dpp: int, rate_basis_points: int, facility: SlipTaxFacility) -> int:
     if facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
         return 0
-    tax = Decimal(dpp) * Decimal(rate_basis_points) / Decimal("10000")
-    return int(tax.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return apply_basis_points(dpp, rate_basis_points)
 
 
 def _tax_by_basis_points(amount: int, rate_basis_points: int) -> int:
-    tax = Decimal(amount) * Decimal(rate_basis_points) / Decimal("10000")
-    return int(tax.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return apply_basis_points(amount, rate_basis_points)
 
 
 def _calculate_bp21_progressive_tax(
@@ -239,89 +227,6 @@ def issue_slip(slip: WithholdingSlip, label: str) -> None:
     slip.withholding_number = f"{label}-{slip.tax_year}{slip.tax_month:02d}-{slip.id:06d}"
 
 
-def is_enrolled(session: Session, *, class_id: int, siswa_id: int) -> bool:
-    return (
-        session.exec(
-            select(Enrollment).where(
-                Enrollment.class_id == class_id,
-                Enrollment.siswa_id == siswa_id,
-            )
-        ).first()
-        is not None
-    )
-
-
-def resolve_slip_scope(
-    *,
-    session: Session,
-    current_user: User,
-    class_id: int | None,
-    siswa_id: int | None,
-    label: str,
-) -> tuple[int, int | None, int]:
-    """Resolve and validate tenant/class/student scope for slip writes."""
-    if current_user.role == Role.siswa:
-        siswa_id = current_user.id
-
-    if siswa_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"siswa_id wajib untuk membuat {label} selain dari akun siswa",
-        )
-
-    siswa = session.get(User, siswa_id)
-    if siswa is None or siswa.role != Role.siswa:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="siswa_id harus merujuk ke akun siswa",
-        )
-
-    if (
-        current_user.role not in (Role.superadmin, Role.siswa)
-        and siswa.tenant_id != current_user.tenant_id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Akses lintas tenant ditolak",
-        )
-
-    tenant_id = siswa.tenant_id
-    if tenant_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Siswa wajib berada dalam tenant",
-        )
-
-    if class_id is not None:
-        school_class = session.get(SchoolClass, class_id)
-        if school_class is None or school_class.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Kelas tidak ditemukan",
-            )
-        if current_user.role == Role.guru and school_class.guru_id != current_user.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bukan kelas Anda")
-        if current_user.role == Role.siswa and not is_enrolled(
-            session, class_id=class_id, siswa_id=current_user.id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Anda tidak terdaftar di kelas ini",
-            )
-        if not is_enrolled(session, class_id=class_id, siswa_id=siswa_id):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Siswa belum terdaftar pada kelas ini",
-            )
-    elif current_user.role == Role.guru:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Guru wajib memilih kelas untuk {label}",
-        )
-
-    return tenant_id, class_id, siswa_id
-
-
 def can_read_slip(session: Session, current_user: User, slip: WithholdingSlip) -> bool:
     if current_user.role == Role.superadmin:
         return True
@@ -389,7 +294,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         data: SlipCreate, current_user: CurrentUser, session: SessionDep
     ) -> WithholdingSlip:
         """Validate scope and construct an unsaved draft slip from a create payload."""
-        tenant_id, class_id, siswa_id = resolve_slip_scope(
+        tenant_id, class_id, siswa_id = resolve_document_scope(
             session=session,
             current_user=current_user,
             class_id=data.class_id,
@@ -755,7 +660,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         payload = data.model_dump(exclude_unset=True)
         class_id = payload.get("class_id", slip.class_id)
         siswa_id = payload.get("siswa_id", slip.siswa_id)
-        tenant_id, resolved_class_id, resolved_siswa_id = resolve_slip_scope(
+        tenant_id, resolved_class_id, resolved_siswa_id = resolve_document_scope(
             session=session,
             current_user=current_user,
             class_id=class_id,
