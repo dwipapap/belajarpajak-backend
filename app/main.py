@@ -14,6 +14,7 @@ from app.routers import (
     dashboard,
     slips,
     tarif_pajak,
+    tax_input_invoices,
     tax_invoices,
     tenants,
     users,
@@ -59,6 +60,7 @@ def create_app() -> FastAPI:
         slips.bp23_router,
         slips.bp26_router,
         tax_invoices.router,
+        tax_input_invoices.router,
         tarif_pajak.router,
         dashboard.router,
     ):
