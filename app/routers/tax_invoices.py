@@ -148,7 +148,10 @@ def build_line(data: TaxInvoiceLineCreate, *, invoice_id: int, line_order: int) 
 
 
 def generate_invoice_number(session: Session, invoice: TaxInvoice) -> str:
-    """16-digit Nomor Faktur: kode transaksi + status + 000 + YY + 8-digit serial.
+    """17-digit NSFP per PER-11/PJ/2025 Pasal 37.
+
+    {tx:2}{status:2}{YY:2}{serial:11} where status 00=normal, 01,02..=pengganti ke-n.
+    Serial is 11-digit per tenant per tax_year, secured via pg_advisory_xact_lock.
 
     The serial runs per tenant per tax year — as in the real system, numbering
     belongs to the taxpayer, so two tenants both start at 1. A PostgreSQL
@@ -158,9 +161,10 @@ def generate_invoice_number(session: Session, invoice: TaxInvoice) -> str:
     The (tenant_id, invoice_number) unique constraint stays as a final backstop;
     callers translate any IntegrityError into a 409.
     """
-    status_digit = "1" if invoice.invoice_kind == TaxInvoiceKind.pengganti else "0"
-    year_suffix = f"{invoice.tax_year % 100:02d}"
-    prefix = f"{invoice.transaction_code}{status_digit}000{year_suffix}"
+    # 2-digit status: 00 normal, 01 pengganti ke-1, etc. Currently only 00 is used
+    # because pengganti is disabled (see _reject_pengganti), but format stays 2-digit.
+    status = "01" if invoice.invoice_kind == TaxInvoiceKind.pengganti else "00"
+    yy = f"{invoice.tax_year % 100:02d}"
 
     session.execute(
         sa_text("SELECT pg_advisory_xact_lock(:key1, :key2)"),
@@ -172,10 +176,17 @@ def generate_invoice_number(session: Session, invoice: TaxInvoice) -> str:
             TaxInvoice.tenant_id == invoice.tenant_id,
             TaxInvoice.tax_year == invoice.tax_year,
             TaxInvoice.invoice_number.is_not(None),
+            func.length(TaxInvoice.invoice_number) == 17,
         )
     ).all()
-    serials = [int(number[-8:]) for number in used if number and number[-8:].isdigit()]
-    return f"{prefix}{max(serials, default=0) + 1:08d}"
+    serials = [int(n[-11:]) for n in used if n and n[-11:].isdigit()]
+    serial = max(serials, default=0) + 1
+    if serial > 99_999_999_999:  # 11-digit cap
+        raise HTTPException(
+            status_code=409,
+            detail="Nomor seri faktur melebihi kapasitas tahun berjalan",
+        )
+    return f"{invoice.transaction_code}{status}{yy}{serial:011d}"
 
 
 # --- access helpers -----------------------------------------------------------
@@ -334,6 +345,16 @@ def _replace_lines(
     session.flush()
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _sanitize_csv_value(value: str) -> str:
+    if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def _invoice_conditions(
     *,
     status: TaxInvoiceStatus | None = None,
@@ -362,9 +383,13 @@ def _invoice_conditions(
     if transaction_code is not None:
         conditions.append(TaxInvoice.transaction_code == transaction_code)
     if buyer_name:
-        conditions.append(TaxInvoice.buyer_name.ilike(f"%{buyer_name}%"))
+        conditions.append(TaxInvoice.buyer_name.ilike(f"%{_escape_like(buyer_name)}%", escape="\\"))
     if buyer_identity_number:
-        conditions.append(TaxInvoice.buyer_identity_number.ilike(f"%{buyer_identity_number}%"))
+        conditions.append(
+            TaxInvoice.buyer_identity_number.ilike(
+                f"%{_escape_like(buyer_identity_number)}%", escape="\\"
+            )
+        )
     if current_user.role == Role.superadmin and tenant_id is not None:
         conditions.append(TaxInvoice.tenant_id == tenant_id)
     if class_id is not None:
@@ -500,15 +525,15 @@ def export_csv(
     for invoice in invoices:
         writer.writerow(
             [
-                invoice.invoice_number or "",
+                _sanitize_csv_value(invoice.invoice_number or ""),
                 invoice.invoice_date.isoformat(),
                 invoice.tax_month,
                 invoice.tax_year,
                 invoice.transaction_code,
                 invoice.invoice_kind.value,
                 invoice.status.value,
-                invoice.buyer_identity_number,
-                invoice.buyer_name,
+                _sanitize_csv_value(invoice.buyer_identity_number),
+                _sanitize_csv_value(invoice.buyer_name),
                 invoice.total_dpp,
                 invoice.total_dpp_other,
                 invoice.total_ppn,
