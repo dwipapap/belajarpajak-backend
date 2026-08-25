@@ -14,13 +14,16 @@ from sqlmodel import Session, func, select
 from app.core.security import hash_password
 from app.db import engine
 from app.models.enrollment import Enrollment
-from app.models.enums import Role, TenantType
+from app.models.enums import Role, TaxInputCreditStatus, TenantType
 from app.models.school_class import SchoolClass
 from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
+from app.models.tax_input_invoice import TaxInputInvoice
 from app.models.tax_invoice import TaxInvoice
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.routers.tax_input_invoices import build_input_line, recalculate_input_invoice
 from app.routers.tax_invoices import build_line, issue_invoice, recalculate_invoice
+from app.schemas.tax_input_invoice import TaxInputLineCreate
 from app.schemas.tax_invoice import TaxInvoiceLineCreate
 
 SEED_PASSWORD = "Password123!"
@@ -177,6 +180,9 @@ def seed(session: Session) -> list[dict]:
         seed_faktur_examples(
             session, tenant=tenant, siswa=siswa_list[0], school_class=first_class
         )
+        seed_masukan_examples(
+            session, tenant=tenant, siswa=siswa_list[0], school_class=first_class
+        )
 
     seed_tarif_pajak(session)
     session.commit()
@@ -303,6 +309,126 @@ def seed_faktur_examples(
         session.flush()
 
 
+FAKTUR_MASUKAN_EXAMPLES: tuple[dict, ...] = (
+    {
+        "reference": "Contoh masukan belum dikreditkan",
+        "transaction_code": "01",
+        "seller_name": "PT SUMBER BARANG SIMULASI",
+        "seller_address": "JL SUDIRMAN NO.45, PEKANBARU",
+        "seller_npwp": "0023456789012000",
+        "credited": False,
+        "lines": [
+            {
+                "line_type": "barang",
+                "item_code": "010000",
+                "item_name": "Kertas HVS A4",
+                "unit": "Paket",
+                "unit_price": 1_000_000,
+                "quantity": 1,
+            }
+        ],
+    },
+    {
+        "reference": "Contoh masukan dikreditkan",
+        "transaction_code": "04",
+        "seller_name": "CV SUMBER JASA SIMULASI",
+        "seller_address": "JL HARAPAN RAYA NO.12, PEKANBARU",
+        "seller_npwp": "0034567890123000",
+        "credited": True,
+        "lines": [
+            {
+                "line_type": "jasa",
+                "item_code": "060000",
+                "item_name": "Jasa Konsultasi Pajak",
+                "unit": "Paket",
+                "unit_price": 1_000_000,
+                "quantity": 1,
+                "use_dpp_other": True,
+            }
+        ],
+    },
+)
+
+
+def seed_masukan_examples(
+    session: Session,
+    *,
+    tenant: Tenant,
+    siswa: User,
+    school_class: SchoolClass | None,
+) -> None:
+    """Create sample Pajak Masukan rows, keyed by reference."""
+    from datetime import UTC, datetime
+
+    for spec in FAKTUR_MASUKAN_EXAMPLES:
+        exists = session.exec(
+            select(TaxInputInvoice).where(
+                TaxInputInvoice.tenant_id == tenant.id,
+                TaxInputInvoice.siswa_id == siswa.id,
+                TaxInputInvoice.reference == spec["reference"],
+            )
+        ).first()
+        if exists is not None:
+            continue
+
+        # Dummy 17-digit NSFP for manual masukan (not generated, just for latihan)
+        dummy_number = f"{spec['transaction_code']}0026{1:011d}"
+        invoice = TaxInputInvoice(
+            tenant_id=tenant.id,
+            class_id=school_class.id if school_class else None,
+            siswa_id=siswa.id,
+            created_by_id=siswa.id,
+            transaction_code=spec["transaction_code"],
+            invoice_date=date(2026, 7, 18),
+            tax_month=7,
+            tax_year=2026,
+            reference=spec["reference"],
+            seller_npwp=spec["seller_npwp"],
+            seller_name=spec["seller_name"],
+            seller_address=spec["seller_address"],
+            seller_idtku="000000",
+            buyer_identity_type="npwp",
+            buyer_identity_number="0013457668062000",
+            buyer_name=f"Siswa {siswa.id} {tenant.name}",
+            buyer_address="JL ARIFIN AHMAD NO.102, PEKANBARU",
+            buyer_idtku="000000",
+            invoice_number=dummy_number,
+        )
+        session.add(invoice)
+        session.flush()
+
+        for order, line_spec in enumerate(spec["lines"]):
+            session.add(
+                build_input_line(
+                    TaxInputLineCreate.model_validate(line_spec),
+                    invoice_id=invoice.id,
+                    line_order=order,
+                )
+            )
+        session.flush()
+        recalculate_input_invoice(session, invoice)
+
+        if spec["credited"]:
+            invoice.credit_status = TaxInputCreditStatus.credited
+            invoice.credited_at = datetime.now(UTC)
+            session.add(invoice)
+        session.flush()
+
+
+def seed_input_for_all_tenants(session: Session) -> None:
+    """Ensure sample masukan exist on already-seeded database."""
+    for tenant in session.exec(select(Tenant)).all():
+        siswa = session.exec(
+            select(User).where(User.tenant_id == tenant.id, User.role == Role.siswa).order_by(User.id)  # noqa: E501
+        ).first()
+        if siswa is None:
+            continue
+        school_class = session.exec(
+            select(SchoolClass).where(SchoolClass.tenant_id == tenant.id).order_by(SchoolClass.id)
+        ).first()
+        seed_masukan_examples(session, tenant=tenant, siswa=siswa, school_class=school_class)
+
+
 def seed_faktur_for_all_tenants(session: Session) -> None:
     """Ensure the sample faktur exist on an already-seeded database."""
     for tenant in session.exec(select(Tenant)).all():
@@ -317,6 +443,7 @@ def seed_faktur_for_all_tenants(session: Session) -> None:
             select(SchoolClass).where(SchoolClass.tenant_id == tenant.id).order_by(SchoolClass.id)
         ).first()
         seed_faktur_examples(session, tenant=tenant, siswa=siswa, school_class=school_class)
+        seed_masukan_examples(session, tenant=tenant, siswa=siswa, school_class=school_class)
 
 
 def seed_tarif_pajak(session: Session) -> None:
