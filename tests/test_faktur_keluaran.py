@@ -127,7 +127,8 @@ def test_ppnbm_is_calculated_from_dpp(client: TestClient):
     assert data["lines"][0]["ppnbm_rate_percent"] == 20
 
 
-def test_issue_assigns_16_digit_invoice_number(client: TestClient):
+def test_issue_generates_17_digit_nsfp(client: TestClient):
+    """17-digit NSFP per PER-11/PJ/2025 Pasal 37: {tx:2}{status:2}{YY:2}{serial:11}."""
     headers = auth_headers(client, SISWA)
     created = _create(client, headers, transaction_code="05")
 
@@ -138,14 +139,34 @@ def test_issue_assigns_16_digit_invoice_number(client: TestClient):
     number = data["invoice_number"]
     assert data["status"] == "issued"
     assert number is not None
-    assert len(number) == 16 and number.isdigit()
-    assert number.startswith("05")  # kode transaksi
-    assert number[2] == "0"  # 0 = faktur normal
-    assert number[6:8] == "26"  # tax_year 2026
+    assert len(number) == 17 and number.isdigit()
+    assert number[:2] == "05"  # kode transaksi
+    assert number[2:4] in ("00", "01")  # 00 normal, 01 pengganti
+    assert number[2:4] == "00"
+    assert int(number[4:6]) == 26  # tax_year 2026 -> YY
+    assert number[6:].isdigit() and len(number[6:]) == 11
 
     # A second issue is a conflict, not a silent re-number.
     again = client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=headers)
     assert again.status_code == 409
+
+
+def test_legacy_16_digit_not_generated(client: TestClient):
+    """Sequential issues increment the 11-digit tail."""
+    headers = auth_headers(client, SISWA)
+    first = _create(client, headers, transaction_code="01")
+    second = _create(client, headers, transaction_code="01")
+
+    n1 = client.post(f"/api/v1/faktur-keluaran/{first['id']}/issue", headers=headers).json()[
+        "invoice_number"
+    ]
+    n2 = client.post(f"/api/v1/faktur-keluaran/{second['id']}/issue", headers=headers).json()[
+        "invoice_number"
+    ]
+
+    assert len(n1) == 17 and len(n2) == 17
+    assert n1[:6] == n2[:6]  # same tx+status+YY prefix
+    assert int(n2[-11:]) == int(n1[-11:]) + 1
 
 
 def test_issue_rejects_invoice_without_lines(client: TestClient):
@@ -356,7 +377,7 @@ def test_pengganti_kind_is_rejected(client: TestClient):
 
 
 def test_issue_serials_are_unique_per_tenant_year(client: TestClient):
-    """Two issues in the same tenant + year get distinct 16-digit numbers."""
+    """Two issues in the same tenant + year get distinct 17-digit numbers."""
     headers = auth_headers(client, SISWA)
     first = _create(client, headers)
     second = _create(client, headers)
@@ -369,8 +390,9 @@ def test_issue_serials_are_unique_per_tenant_year(client: TestClient):
     ).json()["invoice_number"]
 
     assert n1 != n2
-    assert len(n1) == 16 and n1.isdigit()
-    assert len(n2) == 16 and n2.isdigit()
+    assert len(n1) == 17 and n1.isdigit()
+    assert len(n2) == 17 and n2.isdigit()
+    assert int(n2[-11:]) == int(n1[-11:]) + 1
 
 
 def test_inaccessible_mutations_return_404(client: TestClient):
