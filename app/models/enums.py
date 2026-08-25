@@ -91,3 +91,10 @@ class SlipSptFlag(StrEnum):
     objection_withdrawal_accepted = "objection_withdrawal_accepted"
     spt_audited = "spt_audited"
     spt_legal_process = "spt_legal_process"
+
+
+class TaxInputCreditStatus(StrEnum):
+    """Whether a Pajak Masukan invoice has been credited (dikreditkan)."""
+
+    not_credited = "not_credited"
+    credited = "credited"
