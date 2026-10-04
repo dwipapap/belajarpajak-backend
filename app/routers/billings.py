@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
@@ -112,6 +112,24 @@ def get_billing(
 ) -> BillingRead:
     billing = _get_accessible_billing(billing_id, current_user, session)
     return BillingRead.model_validate(billing.model_dump())
+
+
+@router.get("/{billing_id}/pdf", dependencies=[_roles])
+def download_billing_pdf(
+    billing_id: int,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> Response:
+    """Render the printable kode billing slip (mirror of the reference document)."""
+    from app.services.billing_pdf import render_billing_pdf
+
+    billing = _get_accessible_billing(billing_id, current_user, session)
+    pdf_bytes = render_billing_pdf(session, billing)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="BILLING_{billing.code}.pdf"'},
+    )
 
 
 @router.post("/{billing_id}/pay", response_model=BillingRead, dependencies=[_roles])

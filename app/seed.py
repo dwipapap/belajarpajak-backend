@@ -14,17 +14,29 @@ from sqlmodel import Session, func, select
 from app.core.security import hash_password
 from app.db import engine
 from app.models.enrollment import Enrollment
-from app.models.enums import Role, TaxInputCreditStatus, TenantType
+from app.models.enums import (
+    Role,
+    SlipTaxFacility,
+    SlipTaxNature,
+    SlipType,
+    TaxInputCreditStatus,
+    TaxReturnType,
+    TenantType,
+)
 from app.models.school_class import SchoolClass
+from app.models.slip import WithholdingSlip
 from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
 from app.models.tax_input_invoice import TaxInputInvoice
 from app.models.tax_invoice import TaxInvoice
+from app.models.tax_return import TaxReturn
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.routers.slips import _resolve_income_tax, calculate_dpp, issue_slip
 from app.routers.tax_input_invoices import build_input_line, recalculate_input_invoice
 from app.routers.tax_invoices import build_line, issue_invoice, recalculate_invoice
 from app.schemas.tax_input_invoice import TaxInputLineCreate
 from app.schemas.tax_invoice import TaxInvoiceLineCreate
+from app.services import spt as spt_service
 
 SEED_PASSWORD = "Password123!"
 TARIF_YEARS = (2024, 2025, 2026)
@@ -177,12 +189,9 @@ def seed(session: Session) -> list[dict]:
                 if exists is None:
                     session.add(Enrollment(class_id=school_class.id, siswa_id=siswa.id))
 
-        seed_faktur_examples(
-            session, tenant=tenant, siswa=siswa_list[0], school_class=first_class
-        )
-        seed_masukan_examples(
-            session, tenant=tenant, siswa=siswa_list[0], school_class=first_class
-        )
+        seed_faktur_examples(session, tenant=tenant, siswa=siswa_list[0], school_class=first_class)
+        seed_masukan_examples(session, tenant=tenant, siswa=siswa_list[0], school_class=first_class)
+        seed_spt_examples(session, tenant=tenant, siswa=siswa_list[0], school_class=first_class)
 
     seed_tarif_pajak(session)
     session.commit()
@@ -191,8 +200,7 @@ def seed(session: Session) -> list[dict]:
 
 def _print_credentials(credentials: list[dict]) -> None:
     print("\n" + "=" * 60)
-    print("SEED SELESAI — kredensial (kata sandi untuk SEMUA akun: "
-          f"{SEED_PASSWORD})")
+    print(f"SEED SELESAI — kredensial (kata sandi untuk SEMUA akun: {SEED_PASSWORD})")
     print("=" * 60)
     print(f"{'TENANT':<12} {'ROLE':<12} {'EMAIL'}")
     print("-" * 60)
@@ -415,11 +423,247 @@ def seed_masukan_examples(
         session.flush()
 
 
+# --- SPT Masa example material ------------------------------------------------
+#
+# Documents for Masa September 2026 so the SPT flow can be exercised with real
+# figures: an issued keluaran + a credited masukan (PPN kurang bayar 960.000)
+# and an issued BP23 (PPh unifikasi 1.500.000). Plus one already-posted draft
+# SPT PPh Unifikasi as a worked example.
+
+SPT_EXAMPLE_MONTH = 9
+SPT_EXAMPLE_YEAR = 2026
+
+
+def seed_spt_examples(
+    session: Session,
+    *,
+    tenant: Tenant,
+    siswa: User,
+    school_class: SchoolClass | None,
+) -> None:
+    """Create the September-2026 source documents + one posted draft SPT PPh."""
+    from datetime import UTC, datetime
+
+    # 1. Faktur keluaran issued (kode 01) — DPP 12.000.000, PPN 1.440.000.
+    reference = "Contoh faktur untuk SPT Masa September"
+    invoice = session.exec(
+        select(TaxInvoice).where(
+            TaxInvoice.tenant_id == tenant.id,
+            TaxInvoice.siswa_id == siswa.id,
+            TaxInvoice.reference == reference,
+        )
+    ).first()
+    if invoice is None:
+        invoice = TaxInvoice(
+            tenant_id=tenant.id,
+            class_id=school_class.id if school_class else None,
+            siswa_id=siswa.id,
+            created_by_id=siswa.id,
+            transaction_code="01",
+            invoice_date=date(SPT_EXAMPLE_YEAR, SPT_EXAMPLE_MONTH, 10),
+            tax_month=SPT_EXAMPLE_MONTH,
+            tax_year=SPT_EXAMPLE_YEAR,
+            reference=reference,
+            seller_npwp="1471110802000001",
+            seller_name=tenant.name,
+            seller_address="JALAN ARIFIN AHMAD NO.102, PEKANBARU",
+            seller_idtku="000000",
+            buyer_identity_number="0013457668062000",
+            buyer_name="PT MITRA NIAGA SIMULASI",
+            buyer_address="JL POS PENGUMBEN RAYA NO.8, JAKARTA BARAT",
+            buyer_idtku="000000",
+        )
+        session.add(invoice)
+        session.flush()
+        session.add(
+            build_line(
+                TaxInvoiceLineCreate.model_validate(
+                    {
+                        "line_type": "barang",
+                        "item_code": "010000",
+                        "item_name": "Meja Kantor",
+                        "unit": "Unit",
+                        "unit_price": 12_000_000,
+                        "quantity": 1,
+                    }
+                ),
+                invoice_id=invoice.id,
+                line_order=0,
+            )
+        )
+        session.flush()
+        recalculate_invoice(session, invoice)
+        issue_invoice(session, invoice)
+        session.add(invoice)
+        session.flush()
+
+    # 2. Faktur masukan credited (kode 01) — DPP 4.000.000, PPN 480.000.
+    masukan_reference = "Contoh masukan untuk SPT Masa September"
+    masukan = session.exec(
+        select(TaxInputInvoice).where(
+            TaxInputInvoice.tenant_id == tenant.id,
+            TaxInputInvoice.siswa_id == siswa.id,
+            TaxInputInvoice.reference == masukan_reference,
+        )
+    ).first()
+    if masukan is None:
+        masukan = TaxInputInvoice(
+            tenant_id=tenant.id,
+            class_id=school_class.id if school_class else None,
+            siswa_id=siswa.id,
+            created_by_id=siswa.id,
+            transaction_code="01",
+            invoice_date=date(SPT_EXAMPLE_YEAR, SPT_EXAMPLE_MONTH, 8),
+            tax_month=SPT_EXAMPLE_MONTH,
+            tax_year=SPT_EXAMPLE_YEAR,
+            reference=masukan_reference,
+            seller_npwp="0023456789012000",
+            seller_name="PT SUMBER BARANG SIMULASI",
+            seller_address="JL SUDIRMAN NO.45, PEKANBARU",
+            seller_idtku="000000",
+            buyer_identity_type="npwp",
+            buyer_identity_number="0013457668062000",
+            buyer_name=f"Siswa {siswa.id} {tenant.name}",
+            buyer_address="JL ARIFIN AHMAD NO.102, PEKANBARU",
+            buyer_idtku="000000",
+            invoice_number=f"010026{999:011d}",
+        )
+        session.add(masukan)
+        session.flush()
+        session.add(
+            build_input_line(
+                TaxInputLineCreate.model_validate(
+                    {
+                        "line_type": "barang",
+                        "item_code": "010000",
+                        "item_name": "Kursi Kantor",
+                        "unit": "Unit",
+                        "unit_price": 4_000_000,
+                        "quantity": 1,
+                    }
+                ),
+                invoice_id=masukan.id,
+                line_order=0,
+            )
+        )
+        session.flush()
+        recalculate_input_invoice(session, masukan)
+        masukan.credit_status = TaxInputCreditStatus.credited
+        masukan.credited_at = datetime.now(UTC)
+        session.add(masukan)
+        session.flush()
+
+    # 3. BP23 issued — bruto 10.000.000, tarif 15%, PPh 1.500.000 (KJS jasa).
+    kap_kjs = "411124-100"
+    slip_exists = session.exec(
+        select(WithholdingSlip).where(
+            WithholdingSlip.tenant_id == tenant.id,
+            WithholdingSlip.siswa_id == siswa.id,
+            WithholdingSlip.tax_month == SPT_EXAMPLE_MONTH,
+            WithholdingSlip.tax_year == SPT_EXAMPLE_YEAR,
+            WithholdingSlip.kap_kjs == kap_kjs,
+        )
+    ).first()
+    if slip_exists is None:
+        gross_income = 10_000_000
+        dpp_rate = 10_000
+        rate = 1_500
+        dpp = calculate_dpp(gross_income, dpp_rate)
+        slip = WithholdingSlip(
+            slip_type=SlipType.bp23,
+            tenant_id=tenant.id,
+            class_id=school_class.id if school_class else None,
+            siswa_id=siswa.id,
+            created_by_id=siswa.id,
+            tax_month=SPT_EXAMPLE_MONTH,
+            tax_year=SPT_EXAMPLE_YEAR,
+            recipient_identity_number="1234567890123456",
+            recipient_name="PEMOTONGAN SIMULASI SEPTEMBER",
+            recipient_address="JL SUDIRMAN NO.45, PEKANBARU",
+            tax_object_code="24-100-01",
+            tax_object_name="Penggunaan jasa",
+            income_type="Jasa Simulasi",
+            tax_nature=SlipTaxNature.final,
+            tax_facility=SlipTaxFacility.none,
+            gross_income=gross_income,
+            dpp=dpp,
+            dpp_rate_basis_points=dpp_rate,
+            rate_basis_points=rate,
+            income_tax=_resolve_income_tax(
+                session,
+                slip_type=SlipType.bp23,
+                tax_nature=SlipTaxNature.final,
+                tax_facility=SlipTaxFacility.none,
+                gross_income=gross_income,
+                dpp=dpp,
+                rate_basis_points=rate,
+                ptkp_status=None,
+                tax_year=SPT_EXAMPLE_YEAR,
+                negara_treaty=None,
+                tarif_treaty_basis_points=None,
+                recipient_identity_number="1234567890123456",
+            ),
+            kap_kjs=kap_kjs,
+            document_type="Kontrak",
+            document_number="KTR-SPT-001",
+            document_date=date(SPT_EXAMPLE_YEAR, SPT_EXAMPLE_MONTH, 5),
+        )
+        session.add(slip)
+        session.flush()
+        issue_slip(slip, "BP23")
+        session.add(slip)
+        session.flush()
+
+    # 4. Worked example: one posted draft SPT PPh Unifikasi for the same period.
+    spt_exists = session.exec(
+        select(TaxReturn).where(
+            TaxReturn.tenant_id == tenant.id,
+            TaxReturn.siswa_id == siswa.id,
+            TaxReturn.return_type == TaxReturnType.pph_unifikasi,
+            TaxReturn.tax_month == SPT_EXAMPLE_MONTH,
+            TaxReturn.tax_year == SPT_EXAMPLE_YEAR,
+        )
+    ).first()
+    if spt_exists is None:
+        tax_return = TaxReturn(
+            tenant_id=tenant.id,
+            class_id=school_class.id if school_class else None,
+            siswa_id=siswa.id,
+            created_by_id=siswa.id,
+            return_type=TaxReturnType.pph_unifikasi,
+            tax_month=SPT_EXAMPLE_MONTH,
+            tax_year=SPT_EXAMPLE_YEAR,
+        )
+        session.add(tax_return)
+        session.flush()
+        spt_service.posting(session, tax_return)
+        session.add(tax_return)
+        session.flush()
+
+
+def seed_spt_for_all_tenants(session: Session) -> None:
+    """Ensure the SPT example material exists on an already-seeded database."""
+    for tenant in session.exec(select(Tenant)).all():
+        siswa = session.exec(
+            select(User)
+            .where(User.tenant_id == tenant.id, User.role == Role.siswa)
+            .order_by(User.id)
+        ).first()
+        if siswa is None:
+            continue
+        school_class = session.exec(
+            select(SchoolClass).where(SchoolClass.tenant_id == tenant.id).order_by(SchoolClass.id)
+        ).first()
+        seed_spt_examples(session, tenant=tenant, siswa=siswa, school_class=school_class)
+
+
 def seed_input_for_all_tenants(session: Session) -> None:
     """Ensure sample masukan exist on already-seeded database."""
     for tenant in session.exec(select(Tenant)).all():
         siswa = session.exec(
-            select(User).where(User.tenant_id == tenant.id, User.role == Role.siswa).order_by(User.id)  # noqa: E501
+            select(User)
+            .where(User.tenant_id == tenant.id, User.role == Role.siswa)
+            .order_by(User.id)  # noqa: E501
         ).first()
         if siswa is None:
             continue
@@ -489,6 +733,7 @@ def seed_if_empty() -> None:
         if user_count > 0:
             seed_tarif_pajak(session)
             seed_faktur_for_all_tenants(session)
+            seed_spt_for_all_tenants(session)
             session.commit()
             return
         credentials = seed(session)

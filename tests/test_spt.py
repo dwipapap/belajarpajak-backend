@@ -537,3 +537,66 @@ def test_guru_can_review_spt(client: TestClient):
         headers=siswa_headers,
     )
     assert denied.status_code == 403
+
+
+def test_terbilang():
+    from app.services.billing_pdf import terbilang
+
+    assert terbilang(0) == "nol"
+    assert terbilang(1_000) == "seribu"
+    assert terbilang(1_084_909) == (
+        "satu juta delapan puluh empat ribu sembilan ratus sembilan"
+    )
+    assert terbilang(45_957_522) == (
+        "empat puluh lima juta sembilan ratus lima puluh tujuh ribu "
+        "lima ratus dua puluh dua"
+    )
+    assert terbilang(152_206) == "seratus lima puluh dua ribu dua ratus enam"
+
+
+def test_billing_pdf_download(client: TestClient):
+    """The paid billing (PPN, month 5) renders as a valid PDF."""
+    headers = auth_headers(client, SISWA)
+    paid_list = client.get(
+        f"{BASE}/billings", params={"status": "paid"}, headers=headers
+    ).json()
+    assert paid_list["total"] >= 1
+    billing = paid_list["items"][0]
+
+    res = client.get(f"{BASE}/billings/{billing['id']}/pdf", headers=headers)
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.content.startswith(b"%PDF-")
+    assert "BILLING_" in res.headers["content-disposition"]
+
+    # Another siswa cannot download someone else's billing.
+    intruder_headers = auth_headers(client, OTHER_SISWA)
+    denied = client.get(f"{BASE}/billings/{billing['id']}/pdf", headers=intruder_headers)
+    assert denied.status_code == 404
+
+
+def test_billing_pdf_pph_lists_kjs_rows(client: TestClient):
+    """The PPh billing (month 3) detail table carries the pasal KJS row."""
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.services.billing_pdf import billing_detail_rows, render_billing_pdf
+
+    headers = auth_headers(client, SISWA)
+    unpaid_list = client.get(
+        f"{BASE}/billings", params={"status": "unpaid"}, headers=headers
+    ).json()
+    assert unpaid_list["total"] >= 1
+    pph_billing = next(
+        item for item in unpaid_list["items"] if item["kap_kjs"] == "411124-100"
+    )
+
+    with Session(engine) as session:
+        from app.models.billing import BillingCode
+
+        billing = session.get(BillingCode, pph_billing["id"])
+        rows = billing_detail_rows(session, billing)
+        assert rows == [("411124-100", pph_billing["masa_pajak"], pph_billing["amount"])]
+
+        pdf_bytes = render_billing_pdf(session, billing)
+        assert pdf_bytes.startswith(b"%PDF-")
