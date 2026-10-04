@@ -98,3 +98,44 @@ class TaxInputCreditStatus(StrEnum):
 
     not_credited = "not_credited"
     credited = "credited"
+
+
+class TaxReturnType(StrEnum):
+    """Which SPT Masa form a tax return represents."""
+
+    ppn = "ppn"
+    pph_unifikasi = "pph_unifikasi"
+
+
+class TaxReturnKind(StrEnum):
+    """Normal = first filing for a period; pembetulan = correction of a filed one."""
+
+    normal = "normal"
+    pembetulan = "pembetulan"
+
+
+class TaxReturnStatus(StrEnum):
+    """SPT Masa lifecycle.
+
+    ``draft`` is the Konsep bucket, ``awaiting_payment`` is the Menunggu
+    Pembayaran bucket, ``reported`` is Dilaporkan — the same three buckets the
+    real portal sidebar shows.
+    """
+
+    draft = "draft"
+    awaiting_payment = "awaiting_payment"
+    reported = "reported"
+
+
+class SignerCapacity(StrEnum):
+    """Who signs the SPT statement (pernyataan)."""
+
+    wajib_pajak = "wajib_pajak"
+    kuasa_wajib_pajak = "kuasa_wajib_pajak"
+
+
+class BillingStatus(StrEnum):
+    """Kode billing payment state."""
+
+    unpaid = "unpaid"
+    paid = "paid"

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import (
     BuyerIdentityType,
+    SlipSptFlag,
     TaxInputCreditStatus,
     TaxInvoiceKind,
     TaxInvoiceLineType,
@@ -223,6 +224,8 @@ class TaxInputRead(BaseModel):
     total_dpp_other: int
     total_ppn: int
     total_ppnbm: int
+
+    spt_flag: SlipSptFlag | None
 
     score: int | None
     teacher_feedback: str | None

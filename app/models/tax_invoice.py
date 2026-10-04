@@ -21,6 +21,7 @@ from sqlmodel import Field
 from app.models.base import TimestampMixin
 from app.models.enums import (
     BuyerIdentityType,
+    SlipSptFlag,
     TaxInvoiceKind,
     TaxInvoiceLineType,
     TaxInvoiceStatus,
@@ -100,6 +101,14 @@ class TaxInvoice(TimestampMixin, table=True):
     total_dpp_other: int = Field(default=0, ge=0, sa_type=BigInteger)
     total_ppn: int = Field(default=0, ge=0, sa_type=BigInteger)
     total_ppnbm: int = Field(default=0, ge=0, sa_type=BigInteger)
+
+    #: Set when this invoice is included in a filed (reported) SPT Masa.
+    spt_flag: SlipSptFlag | None = Field(
+        default=None,
+        sa_column=Column(
+            SAEnum(SlipSptFlag, name="slip_spt_flag"), nullable=True, index=True
+        ),
+    )
 
     score: int | None = Field(default=None, ge=0, le=100)
     teacher_feedback: str | None = Field(default=None, max_length=500)

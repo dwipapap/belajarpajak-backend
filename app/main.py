@@ -10,12 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routers import (
     auth,
+    billings,
     classes,
     dashboard,
     slips,
     tarif_pajak,
     tax_input_invoices,
     tax_invoices,
+    tax_returns,
     tenants,
     users,
 )
@@ -61,6 +63,8 @@ def create_app() -> FastAPI:
         slips.bp26_router,
         tax_invoices.router,
         tax_input_invoices.router,
+        tax_returns.router,
+        billings.router,
         tarif_pajak.router,
         dashboard.router,
     ):
