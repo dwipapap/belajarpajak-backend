@@ -43,6 +43,7 @@ from app.schemas.tax_invoice import (
     TaxInvoiceSummary,
     TaxInvoiceUpdate,
 )
+from app.services.audit import log_action
 
 LABEL = "Faktur Pajak Keluaran"
 MAX_EXPORT_ROWS = 5_000
@@ -71,10 +72,13 @@ _CSV_COLUMNS = (
 router = APIRouter(prefix="/faktur-keluaran", tags=["faktur-keluaran"])
 
 _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
-_review_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru))
+# Mutating document endpoints — the superadmin is deliberately excluded
+# (read-only + account management only).
+_write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
+_review_roles = Depends(require_roles(Role.admin, Role.guru))
 # Membatalkan dokumen adalah tindakan penjual (tenant) — siswa dan guru hanya
 # meninjau; hanya admin/superadmin tenant yang boleh membatalkan.
-_cancel_roles = Depends(require_roles(Role.superadmin, Role.admin))
+_cancel_roles = Depends(require_roles(Role.admin))
 
 
 # --- tax engine ---------------------------------------------------------------
@@ -551,7 +555,7 @@ def export_csv(
     "",
     response_model=TaxInvoiceRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_roles],
+    dependencies=[_write_roles],
 )
 def create_invoice(
     data: TaxInvoiceCreate, current_user: CurrentUser, session: SessionDep
@@ -596,7 +600,7 @@ def create_invoice(
     return invoice_to_read(session, invoice)
 
 
-@router.post("/bulk-issue", response_model=TaxInvoiceBulkIssueResult, dependencies=[_roles])
+@router.post("/bulk-issue", response_model=TaxInvoiceBulkIssueResult, dependencies=[_write_roles])
 def bulk_issue(
     data: TaxInvoiceBulkIssue, current_user: CurrentUser, session: SessionDep
 ) -> TaxInvoiceBulkIssueResult:
@@ -641,7 +645,7 @@ def get_invoice(
     return invoice_to_read(session, _get_accessible_invoice(invoice_id, current_user, session))
 
 
-@router.patch("/{invoice_id}", response_model=TaxInvoiceRead, dependencies=[_roles])
+@router.patch("/{invoice_id}", response_model=TaxInvoiceRead, dependencies=[_write_roles])
 def update_invoice(
     invoice_id: int, data: TaxInvoiceUpdate, current_user: CurrentUser, session: SessionDep
 ) -> TaxInvoiceRead:
@@ -691,7 +695,7 @@ def update_invoice(
     return invoice_to_read(session, invoice)
 
 
-@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_roles])
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_write_roles])
 def delete_invoice(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> None:
     """Hapus Dokumen — only drafts can be deleted."""
     invoice = _get_accessible_invoice(invoice_id, current_user, session)
@@ -700,7 +704,7 @@ def delete_invoice(invoice_id: int, current_user: CurrentUser, session: SessionD
     session.commit()
 
 
-@router.post("/{invoice_id}/issue", response_model=TaxInvoiceRead, dependencies=[_roles])
+@router.post("/{invoice_id}/issue", response_model=TaxInvoiceRead, dependencies=[_write_roles])
 def issue(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> TaxInvoiceRead:
     """Upload Faktur — assigns the Nomor Faktur and moves the draft to Telah Terbit."""
     invoice = _get_accessible_invoice(invoice_id, current_user, session)
@@ -720,6 +724,16 @@ def issue(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> Ta
             status_code=status.HTTP_409_CONFLICT,
             detail="Nomor faktur bentrok, silakan coba lagi",
         ) from exc
+    log_action(
+        session,
+        actor=current_user,
+        action="document.issue",
+        entity="faktur_keluaran",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Menerbitkan Faktur {invoice.invoice_number} atas nama {invoice.buyer_name}",
+    )
+    session.commit()
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
 
@@ -739,6 +753,15 @@ def cancel(
     invoice.invoice_kind = TaxInvoiceKind.dibatalkan
     invoice.invalid_reason = data.reason or "Dibatalkan oleh penjual"
     session.add(invoice)
+    log_action(
+        session,
+        actor=current_user,
+        action="document.cancel",
+        entity="faktur_keluaran",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Membatalkan Faktur {invoice.invoice_number}",
+    )
     session.commit()
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
@@ -753,6 +776,15 @@ def review(
     for field, value in payload.items():
         setattr(invoice, field, value)
     session.add(invoice)
+    log_action(
+        session,
+        actor=current_user,
+        action="document.review",
+        entity="faktur_keluaran",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Menilai Faktur {invoice.invoice_number} (skor {invoice.score})",
+    )
     session.commit()
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
@@ -765,7 +797,7 @@ def review(
     "/{invoice_id}/lines",
     response_model=TaxInvoiceRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_roles],
+    dependencies=[_write_roles],
 )
 def add_line(
     invoice_id: int,
@@ -785,7 +817,7 @@ def add_line(
 
 
 @router.patch(
-    "/{invoice_id}/lines/{line_id}", response_model=TaxInvoiceRead, dependencies=[_roles]
+    "/{invoice_id}/lines/{line_id}", response_model=TaxInvoiceRead, dependencies=[_write_roles]
 )
 def update_line(
     invoice_id: int,
@@ -822,7 +854,7 @@ def update_line(
 
 
 @router.delete(
-    "/{invoice_id}/lines/{line_id}", response_model=TaxInvoiceRead, dependencies=[_roles]
+    "/{invoice_id}/lines/{line_id}", response_model=TaxInvoiceRead, dependencies=[_write_roles]
 )
 def delete_line(
     invoice_id: int, line_id: int, current_user: CurrentUser, session: SessionDep

@@ -9,6 +9,7 @@ class TenantType(StrEnum):
     smk = "smk"
     kampus = "kampus"
     lembaga = "lembaga"
+    pt = "pt"
 
 
 class Role(StrEnum):

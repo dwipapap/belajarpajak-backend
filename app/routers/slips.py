@@ -47,6 +47,7 @@ from app.schemas.slip import (
     SlipSummary,
     SlipUpdate,
 )
+from app.services.audit import log_action
 
 MAX_IMPORT_BYTES = 1_000_000
 MAX_IMPORT_ROWS = 500
@@ -262,7 +263,10 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     router = APIRouter(prefix=f"/{prefix}", tags=[prefix])
 
     _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
-    _review_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru))
+    #: Mutating document endpoints — the superadmin is deliberately excluded
+    #: (read-only + account management only).
+    _write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
+    _review_roles = Depends(require_roles(Role.admin, Role.guru))
 
     def _get_accessible_slip(
         slip_id: int, current_user: CurrentUser, session: SessionDep
@@ -530,7 +534,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             headers={"Content-Disposition": f'attachment; filename="{prefix}_export.xml"'},
         )
 
-    @router.post("/import-xml", response_model=SlipImportResult, dependencies=[_roles])
+    @router.post("/import-xml", response_model=SlipImportResult, dependencies=[_write_roles])
     async def import_xml(
         file: UploadFile, current_user: CurrentUser, session: SessionDep
     ) -> SlipImportResult:
@@ -600,16 +604,26 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         "",
         response_model=SlipRead,
         status_code=status.HTTP_201_CREATED,
-        dependencies=[_roles],
+        dependencies=[_write_roles],
     )
     def create_slip(data: SlipCreate, current_user: CurrentUser, session: SessionDep) -> SlipRead:
         slip = _build_slip(data, current_user, session)
         session.add(slip)
+        session.flush()
+        log_action(
+            session,
+            actor=current_user,
+            action="document.create",
+            entity=slip_type.value,
+            entity_id=slip.id,
+            tenant_id=slip.tenant_id,
+            summary=f"Membuat {label} untuk {slip.recipient_name}",
+        )
         session.commit()
         session.refresh(slip)
         return slip_to_read(slip)
 
-    @router.post("/bulk-issue", response_model=SlipBulkIssueResult, dependencies=[_roles])
+    @router.post("/bulk-issue", response_model=SlipBulkIssueResult, dependencies=[_write_roles])
     def bulk_issue(
         data: SlipBulkIssue, current_user: CurrentUser, session: SessionDep
     ) -> SlipBulkIssueResult:
@@ -646,7 +660,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     def get_slip(slip_id: int, current_user: CurrentUser, session: SessionDep) -> SlipRead:
         return slip_to_read(_get_accessible_slip(slip_id, current_user, session))
 
-    @router.patch("/{slip_id}", response_model=SlipRead, dependencies=[_roles])
+    @router.patch("/{slip_id}", response_model=SlipRead, dependencies=[_write_roles])
     def update_slip(
         slip_id: int, data: SlipUpdate, current_user: CurrentUser, session: SessionDep
     ) -> SlipRead:
@@ -699,7 +713,9 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         session.refresh(slip)
         return slip_to_read(slip)
 
-    @router.delete("/{slip_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_roles])
+    @router.delete(
+        "/{slip_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_write_roles]
+    )
     def delete_slip(slip_id: int, current_user: CurrentUser, session: SessionDep) -> None:
         """Hapus — only drafts (Belum Terbit) can be deleted."""
         slip = _get_accessible_slip(slip_id, current_user, session)
@@ -708,10 +724,19 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Hanya {label} draft yang dapat dihapus",
             )
+        log_action(
+            session,
+            actor=current_user,
+            action="document.delete",
+            entity=slip_type.value,
+            entity_id=slip.id,
+            tenant_id=slip.tenant_id,
+            summary=f"Menghapus {label} draft atas nama {slip.recipient_name}",
+        )
         session.delete(slip)
         session.commit()
 
-    @router.post("/{slip_id}/issue", response_model=SlipRead, dependencies=[_roles])
+    @router.post("/{slip_id}/issue", response_model=SlipRead, dependencies=[_write_roles])
     def issue(slip_id: int, current_user: CurrentUser, session: SessionDep) -> SlipRead:
         slip = _get_accessible_slip(slip_id, current_user, session)
         if slip.status != SlipStatus.draft:
@@ -721,11 +746,23 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
 
         issue_slip(slip, label)
         session.add(slip)
+        log_action(
+            session,
+            actor=current_user,
+            action="document.issue",
+            entity=slip_type.value,
+            entity_id=slip.id,
+            tenant_id=slip.tenant_id,
+            summary=(
+                f"Menerbitkan {label} {slip.withholding_number} "
+                f"atas nama {slip.recipient_name}"
+            ),
+        )
         session.commit()
         session.refresh(slip)
         return slip_to_read(slip)
 
-    @router.post("/{slip_id}/cancel", response_model=SlipRead, dependencies=[_roles])
+    @router.post("/{slip_id}/cancel", response_model=SlipRead, dependencies=[_write_roles])
     def cancel(
         slip_id: int, data: SlipCancel, current_user: CurrentUser, session: SessionDep
     ) -> SlipRead:
@@ -739,6 +776,15 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         slip.status = SlipStatus.invalid
         slip.invalid_reason = data.reason or "Dibatalkan oleh pemotong"
         session.add(slip)
+        log_action(
+            session,
+            actor=current_user,
+            action="document.cancel",
+            entity=slip_type.value,
+            entity_id=slip.id,
+            tenant_id=slip.tenant_id,
+            summary=f"Membatalkan {label} {slip.withholding_number}",
+        )
         session.commit()
         session.refresh(slip)
         return slip_to_read(slip)
@@ -751,6 +797,18 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         slip.status = SlipStatus.invalid
         slip.invalid_reason = data.invalid_reason
         session.add(slip)
+        log_action(
+            session,
+            actor=current_user,
+            action="document.invalidate",
+            entity=slip_type.value,
+            entity_id=slip.id,
+            tenant_id=slip.tenant_id,
+            summary=(
+                f"Menandai tidak valid {label} {slip.withholding_number}: "
+                f"{data.invalid_reason}"
+            ),
+        )
         session.commit()
         session.refresh(slip)
         return slip_to_read(slip)
@@ -781,6 +839,15 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         for field, value in payload.items():
             setattr(slip, field, value)
         session.add(slip)
+        log_action(
+            session,
+            actor=current_user,
+            action="document.review",
+            entity=slip_type.value,
+            entity_id=slip.id,
+            tenant_id=slip.tenant_id,
+            summary=f"Menilai {label} {slip.withholding_number} (skor {slip.score})",
+        )
         session.commit()
         session.refresh(slip)
         return slip_to_read(slip)

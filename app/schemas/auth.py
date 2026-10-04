@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.enums import Role
 
@@ -11,9 +11,17 @@ from app.models.enums import Role
 
 
 class LoginRequest(BaseModel):
-    email: str
+    """``identifier`` is the login handle: email (admin/guru/superadmin) or
+    username/NIK/NISN (siswa). Email and username are both globally unique,
+    so no school code is needed to disambiguate."""
+
+    identifier: str
     password: str
-    tenant_slug: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
 
 
 class TokenPair(BaseModel):
@@ -34,8 +42,10 @@ class AccessTokenResponse(BaseModel):
 class MeResponse(BaseModel):
     id: int
     email: str
+    username: str | None
     full_name: str
     role: Role
     tenant_id: int | None
     tenant_name: str | None
     is_active: bool
+    must_change_password: bool

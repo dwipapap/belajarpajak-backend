@@ -15,6 +15,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_REFRESH = "refresh"
 
+#: Shared bootstrap password for bulk-provisioned accounts. Every such account
+#: carries ``must_change_password`` so recipients must pick a personal one at
+#: first login — this value only gets them through the door once.
+DEFAULT_PASSWORD = "Password123!"
+
 
 def hash_password(plain: str) -> str:
     return pwd_context.hash(plain)

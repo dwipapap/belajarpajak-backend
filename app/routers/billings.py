@@ -25,6 +25,8 @@ from app.schemas.tax_return import BillingListResponse, BillingRead
 router = APIRouter(prefix="/billings", tags=["billings"])
 
 _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
+# Paying a billing mutates the SPT — superadmin stays read-only.
+_write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
 
 
 def can_read_billing(session: Session, current_user: User, billing: BillingCode) -> bool:
@@ -132,7 +134,7 @@ def download_billing_pdf(
     )
 
 
-@router.post("/{billing_id}/pay", response_model=BillingRead, dependencies=[_roles])
+@router.post("/{billing_id}/pay", response_model=BillingRead, dependencies=[_write_roles])
 def pay_billing(
     billing_id: int,
     current_user: CurrentUser,
@@ -161,6 +163,17 @@ def pay_billing(
             tax_return.submitted_by_id = current_user.id
             session.add(tax_return)
 
+    from app.services.audit import log_action
+
+    log_action(
+        session,
+        actor=current_user,
+        action="billing.pay",
+        entity="billing",
+        entity_id=billing.id,
+        tenant_id=billing.tenant_id,
+        summary=f"Membayar kode billing {billing.code} ({billing.amount})",
+    )
     session.commit()
     session.refresh(billing)
     return BillingRead.model_validate(billing.model_dump())

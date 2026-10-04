@@ -13,11 +13,16 @@ class ClassCreate(BaseModel):
     guru_id: int
 
 
+class ClassArchiveUpdate(BaseModel):
+    archived: bool
+
+
 class ClassRead(BaseModel):
     id: int
     tenant_id: int
     name: str
     academic_year: str
+    archived: bool = False
     guru_id: int
     guru: UserRead | None = None
 

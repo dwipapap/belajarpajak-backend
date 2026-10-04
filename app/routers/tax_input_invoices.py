@@ -51,6 +51,7 @@ from app.schemas.tax_input_invoice import (
     TaxInputSummary,
     TaxInputUpdate,
 )
+from app.services.audit import log_action
 
 LABEL = "Faktur Pajak Masukan"
 MAX_EXPORT_ROWS = 5_000
@@ -80,8 +81,11 @@ _CSV_COLUMNS = (
 router = APIRouter(prefix="/faktur-masukan", tags=["faktur-masukan"])
 
 _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
-_review_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru))
-_credit_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.siswa))
+# Mutating document endpoints — the superadmin is deliberately excluded
+# (read-only + account management only).
+_write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
+_review_roles = Depends(require_roles(Role.admin, Role.guru))
+_credit_roles = Depends(require_roles(Role.admin, Role.siswa))
 
 
 # --- tax engine ---------------------------------------------------------------
@@ -556,7 +560,7 @@ def export_csv(
     "",
     response_model=TaxInputRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_roles],
+    dependencies=[_write_roles],
 )
 def create_input_invoice(
     data: TaxInputCreate, current_user: CurrentUser, session: SessionDep
@@ -724,7 +728,7 @@ def bulk_uncredit(
     return result
 
 
-@router.post("/bulk-delete", response_model=TaxInputBulkDeleteResult, dependencies=[_roles])
+@router.post("/bulk-delete", response_model=TaxInputBulkDeleteResult, dependencies=[_write_roles])
 def bulk_delete(
     data: TaxInputBulkDelete, current_user: CurrentUser, session: SessionDep
 ) -> TaxInputBulkDeleteResult:
@@ -761,7 +765,7 @@ def get_input_invoice(
     return invoice_to_read(session, _get_accessible_input_invoice(invoice_id, current_user, session))
 
 
-@router.patch("/{invoice_id}", response_model=TaxInputRead, dependencies=[_roles])
+@router.patch("/{invoice_id}", response_model=TaxInputRead, dependencies=[_write_roles])
 def update_input_invoice(
     invoice_id: int, data: TaxInputUpdate, current_user: CurrentUser, session: SessionDep
 ) -> TaxInputRead:
@@ -823,7 +827,7 @@ def update_input_invoice(
     return invoice_to_read(session, invoice)
 
 
-@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_roles])
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_write_roles])
 def delete_input_invoice(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> None:
     invoice = _get_accessible_input_invoice(invoice_id, current_user, session)
     _require_draft(invoice, "dihapus")
@@ -843,6 +847,15 @@ def credit(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> T
     invoice.credit_status = TaxInputCreditStatus.credited
     invoice.credited_at = datetime.now(UTC)
     session.add(invoice)
+    log_action(
+        session,
+        actor=current_user,
+        action="document.credit",
+        entity="faktur_masukan",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Mengkreditkan Faktur {invoice.invoice_number} dari {invoice.seller_name}",
+    )
     session.commit()
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
@@ -857,12 +870,21 @@ def uncredit(invoice_id: int, current_user: CurrentUser, session: SessionDep) ->
     invoice.credit_status = TaxInputCreditStatus.not_credited
     invoice.credited_at = None
     session.add(invoice)
+    log_action(
+        session,
+        actor=current_user,
+        action="document.uncredit",
+        entity="faktur_masukan",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Batal kredit Faktur {invoice.invoice_number} dari {invoice.seller_name}",
+    )
     session.commit()
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
 
 
-@router.post("/{invoice_id}/cancel", response_model=TaxInputRead, dependencies=[Depends(require_roles(Role.superadmin, Role.admin))])
+@router.post("/{invoice_id}/cancel", response_model=TaxInputRead, dependencies=[Depends(require_roles(Role.admin))])
 def cancel(
     invoice_id: int, data: TaxInputCancel, current_user: CurrentUser, session: SessionDep
 ) -> TaxInputRead:
@@ -900,7 +922,7 @@ def review(
     "/{invoice_id}/lines",
     response_model=TaxInputRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_roles],
+    dependencies=[_write_roles],
 )
 def add_line(
     invoice_id: int,
@@ -921,7 +943,7 @@ def add_line(
 
 
 @router.patch(
-    "/{invoice_id}/lines/{line_id}", response_model=TaxInputRead, dependencies=[_roles]
+    "/{invoice_id}/lines/{line_id}", response_model=TaxInputRead, dependencies=[_write_roles]
 )
 def update_line(
     invoice_id: int,
@@ -957,7 +979,7 @@ def update_line(
 
 
 @router.delete(
-    "/{invoice_id}/lines/{line_id}", response_model=TaxInputRead, dependencies=[_roles]
+    "/{invoice_id}/lines/{line_id}", response_model=TaxInputRead, dependencies=[_write_roles]
 )
 def delete_line(
     invoice_id: int, line_id: int, current_user: CurrentUser, session: SessionDep

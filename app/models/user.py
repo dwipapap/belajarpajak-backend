@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Column, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Index
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field
 
@@ -13,16 +13,11 @@ from app.models.enums import Role
 class User(TimestampMixin, table=True):
     __tablename__ = "users"
     __table_args__ = (
-        # Email is unique within a tenant.
-        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
-        # Superadmin (tenant_id IS NULL) email is globally unique — enforced via a
-        # partial index because SQL treats NULLs in a composite unique as distinct.
-        Index(
-            "uq_users_superadmin_email",
-            "email",
-            unique=True,
-            postgresql_where=Column("tenant_id").is_(None),
-        ),
+        # Email is globally unique (login identifier for admin/guru/superadmin).
+        Index("uq_users_email", "email", unique=True),
+        # Siswa login identifier (NIK/NISN) — globally unique, NULL for the
+        # email-login roles. Postgres allows many NULLs in a unique index.
+        Index("uq_users_username", "username", unique=True),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -31,7 +26,13 @@ class User(TimestampMixin, table=True):
         sa_column=Column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True),
     )
     email: str = Field(max_length=255, index=True)
+    #: Siswa-only login identifier (NIK/NISN). Email stays a generated
+    #: placeholder for bulk-created siswa so every account keeps one.
+    username: str | None = Field(default=None, max_length=32, index=True)
     password_hash: str = Field(max_length=255)
+    #: True for freshly created (bulk) accounts — the UI forces a password
+    #: change before any other request succeeds.
+    must_change_password: bool = Field(default=False, nullable=False)
     full_name: str = Field(max_length=150)
     role: Role = Field(sa_column=Column(SAEnum(Role, name="user_role"), nullable=False))
     is_active: bool = Field(default=True, nullable=False)

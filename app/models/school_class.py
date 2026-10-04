@@ -17,6 +17,8 @@ class SchoolClass(TimestampMixin, table=True):
     )
     name: str = Field(max_length=100)
     academic_year: str = Field(max_length=9)  # e.g. "2026/2027"
+    #: Archived = tidak lagi aktif diajar; riwayat dokumen tetap terbaca.
+    archived: bool = Field(default=False, nullable=False)
     guru_id: int = Field(
         sa_column=Column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     )

@@ -61,8 +61,24 @@ PROGRESSIVE_DEFAULTS: tuple[tuple[int, int | None, int], ...] = (
 )
 
 TENANTS = [
-    {"name": "SMK Negeri 1 Pekanbaru", "slug": "smkn1-pku", "type": TenantType.smk},
-    {"name": "Politeknik Caltex Riau", "slug": "pcr", "type": TenantType.kampus},
+    {
+        "name": "SMK Negeri 1 Pekanbaru",
+        "slug": "smkn1-pku",
+        "type": TenantType.smk,
+        "contact_wa": "0812-0000-0001",
+        "max_guru": 10,
+        "max_siswa": 60,
+        "max_kelas": 4,
+    },
+    {
+        "name": "Politeknik Caltex Riau",
+        "slug": "pcr",
+        "type": TenantType.kampus,
+        "contact_wa": "0812-0000-0002",
+        "max_guru": None,
+        "max_siswa": None,
+        "max_kelas": None,
+    },
 ]
 
 SUPERADMIN_EMAIL = "super@pajaksim.local"
@@ -76,6 +92,7 @@ def _get_or_create_user(
     role: Role,
     tenant_id: int | None,
     password_hash: str,
+    username: str | None = None,
 ) -> User:
     existing = session.exec(
         select(User).where(User.email == email, User.tenant_id == tenant_id)
@@ -84,6 +101,7 @@ def _get_or_create_user(
         return existing
     user = User(
         email=email,
+        username=username,
         full_name=full_name,
         role=role,
         tenant_id=tenant_id,
@@ -113,7 +131,16 @@ def seed(session: Session) -> list[dict]:
     for spec in TENANTS:
         tenant = session.exec(select(Tenant).where(Tenant.slug == spec["slug"])).first()
         if tenant is None:
-            tenant = Tenant(name=spec["name"], slug=spec["slug"], type=spec["type"])
+            tenant = Tenant(
+                name=spec["name"],
+                slug=spec["slug"],
+                type=spec["type"],
+                contact_wa=spec.get("contact_wa"),
+                berlaku_sampai=date(date.today().year + 1, date.today().month, date.today().day),
+                max_guru=spec.get("max_guru"),
+                max_siswa=spec.get("max_siswa"),
+                max_kelas=spec.get("max_kelas"),
+            )
             session.add(tenant)
             session.flush()
 
@@ -151,6 +178,8 @@ def seed(session: Session) -> list[dict]:
                 role=Role.siswa,
                 tenant_id=tenant.id,
                 password_hash=pw_hash,
+                # NISN dummy per institution — the siswa login handle.
+                username=f"00{i}2345678",
             )
             siswa_list.append(siswa)
             credentials.append({"tenant": slug, "role": "siswa", "email": siswa.email})

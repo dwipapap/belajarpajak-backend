@@ -68,8 +68,12 @@ def client() -> TestClient:
 
 
 def login(client: TestClient, email: str, password: str = "Password123!", **extra) -> dict:
-    """Helper: perform a login and return the JSON body (raises on non-200)."""
-    payload = {"email": email, "password": password, **extra}
+    """Helper: perform a login and return the JSON body (raises on non-200).
+
+    ``email`` is passed as the ``identifier`` handle — it may equally be a
+    siswa username (NIK/NISN).
+    """
+    payload = {"identifier": email, "password": password, **extra}
     resp = client.post("/api/v1/auth/login", json=payload)
     resp.raise_for_status()
     return resp.json()

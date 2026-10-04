@@ -217,7 +217,11 @@ def test_cancel_marks_issued_invoice_invalid(client: TestClient):
 
 
 def test_cancel_role_matrix(client: TestClient):
-    """siswa and guru may never cancel; admin and superadmin may."""
+    """siswa, guru, and superadmin may never cancel; only the admin may.
+
+    The superadmin is deliberately read-only on documents (account management
+    and oversight only), so cancellation — a seller action — is admin-only.
+    """
     base_headers = auth_headers(client, SISWA)
 
     def _issued():
@@ -225,7 +229,7 @@ def test_cancel_role_matrix(client: TestClient):
         client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=base_headers)
         return created["id"]
 
-    for email in (SISWA, GURU):
+    for email in (SISWA, GURU, SUPERADMIN):
         res = client.post(
             f"/api/v1/faktur-keluaran/{_issued()}/cancel",
             json={"reason": "x"},
@@ -233,13 +237,12 @@ def test_cancel_role_matrix(client: TestClient):
         )
         assert res.status_code == 403
 
-    for email in (ADMIN, SUPERADMIN):
-        res = client.post(
-            f"/api/v1/faktur-keluaran/{_issued()}/cancel",
-            json={"reason": "x"},
-            headers=auth_headers(client, email),
-        )
-        assert res.status_code == 200
+    res = client.post(
+        f"/api/v1/faktur-keluaran/{_issued()}/cancel",
+        json={"reason": "x"},
+        headers=auth_headers(client, ADMIN),
+    )
+    assert res.status_code == 200
 
 
 def test_lines_can_be_added_and_removed_with_totals_kept_in_sync(client: TestClient):

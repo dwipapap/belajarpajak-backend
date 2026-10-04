@@ -1,5 +1,6 @@
 """SQLModel table models. Import all here so Alembic autogenerate sees the metadata."""
 
+from app.models.audit_log import AuditLog
 from app.models.billing import BillingCode
 from app.models.enrollment import Enrollment
 from app.models.enums import (
@@ -60,6 +61,7 @@ __all__ = [
     "TaxReturn",
     "TaxReturnLine",
     "BillingCode",
+    "AuditLog",
     "TierPtkp",
     "TarifProgresifPasal17",
 ]

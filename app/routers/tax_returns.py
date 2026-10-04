@@ -38,13 +38,17 @@ from app.schemas.tax_return import (
     TaxReturnSummary,
 )
 from app.services import spt as spt_service
+from app.services.audit import log_action
 
 LABEL = "SPT Masa"
 
 router = APIRouter(prefix="/spt", tags=["spt"])
 
 _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
-_review_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru))
+# Mutating SPT endpoints — the superadmin is deliberately excluded
+# (read-only + account management only).
+_write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
+_review_roles = Depends(require_roles(Role.admin, Role.guru))
 
 
 # --- access helpers -----------------------------------------------------------
@@ -185,7 +189,10 @@ def return_summary(
 
 
 @router.post(
-    "", response_model=TaxReturnRead, status_code=status.HTTP_201_CREATED, dependencies=[_roles]
+    "",
+    response_model=TaxReturnRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_write_roles],
 )
 def create_return(
     data: TaxReturnCreate,
@@ -259,7 +266,7 @@ def get_return(
     return return_to_read(session, _get_accessible_return(return_id, current_user, session))
 
 
-@router.post("/{return_id}/posting", response_model=TaxReturnRead, dependencies=[_roles])
+@router.post("/{return_id}/posting", response_model=TaxReturnRead, dependencies=[_write_roles])
 def post_return(
     return_id: int,
     current_user: CurrentUser,
@@ -277,7 +284,7 @@ def post_return(
     return return_to_read(session, tax_return)
 
 
-@router.post("/{return_id}/pernyataan", response_model=TaxReturnRead, dependencies=[_roles])
+@router.post("/{return_id}/pernyataan", response_model=TaxReturnRead, dependencies=[_write_roles])
 def save_pernyataan(
     return_id: int,
     data: TaxReturnPernyataan,
@@ -299,7 +306,7 @@ def save_pernyataan(
     return return_to_read(session, tax_return)
 
 
-@router.post("/{return_id}/submit", response_model=TaxReturnRead, dependencies=[_roles])
+@router.post("/{return_id}/submit", response_model=TaxReturnRead, dependencies=[_write_roles])
 def submit_return(
     return_id: int,
     data: TaxReturnSubmit,
@@ -334,18 +341,36 @@ def submit_return(
     if tax_return.amount_due > 0:
         spt_service.ensure_billing(session, tax_return)
         tax_return.status = TaxReturnStatus.awaiting_payment
+        summary = (
+            f"Melaporkan SPT {tax_return.return_type.value} masa "
+            f"{tax_return.tax_month:02d}/{tax_return.tax_year} — kurang bayar, "
+            "kode billing diterbitkan"
+        )
     else:
         spt_service.mark_sources_reported(session, tax_return)
         tax_return.status = TaxReturnStatus.reported
         tax_return.submitted_at = datetime.now(tz=UTC)
         tax_return.submitted_by_id = current_user.id
+        summary = (
+            f"Melaporkan SPT {tax_return.return_type.value} masa "
+            f"{tax_return.tax_month:02d}/{tax_return.tax_year} — nihil/lebih bayar"
+        )
+    log_action(
+        session,
+        actor=current_user,
+        action="spt.submit",
+        entity="spt",
+        entity_id=tax_return.id,
+        tenant_id=tax_return.tenant_id,
+        summary=summary,
+    )
     session.add(tax_return)
     session.commit()
     session.refresh(tax_return)
     return return_to_read(session, tax_return)
 
 
-@router.post("/{return_id}/pembetulan", response_model=TaxReturnRead, dependencies=[_roles])
+@router.post("/{return_id}/pembetulan", response_model=TaxReturnRead, dependencies=[_write_roles])
 def create_pembetulan(
     return_id: int,
     current_user: CurrentUser,
@@ -378,13 +403,25 @@ def create_pembetulan(
     tax_return.ppn_lebih_bayar = 0
     tax_return.total_income_tax = 0
     tax_return.amount_due = 0
+    log_action(
+        session,
+        actor=current_user,
+        action="spt.pembetulan",
+        entity="spt",
+        entity_id=tax_return.id,
+        tenant_id=tax_return.tenant_id,
+        summary=(
+            f"Pembetulan {tax_return.correction_no} untuk SPT masa "
+            f"{tax_return.tax_month:02d}/{tax_return.tax_year}"
+        ),
+    )
     session.add(tax_return)
     session.commit()
     session.refresh(tax_return)
     return return_to_read(session, tax_return)
 
 
-@router.delete("/{return_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_roles])
+@router.delete("/{return_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_write_roles])
 def delete_return(
     return_id: int,
     current_user: CurrentUser,
@@ -432,6 +469,18 @@ def review_return(
     tax_return.score = data.score
     tax_return.teacher_feedback = data.teacher_feedback
     session.add(tax_return)
+    log_action(
+        session,
+        actor=current_user,
+        action="spt.review",
+        entity="spt",
+        entity_id=tax_return.id,
+        tenant_id=tax_return.tenant_id,
+        summary=(
+            f"Menilai SPT masa {tax_return.tax_month:02d}/{tax_return.tax_year} "
+            f"(skor {data.score})"
+        ),
+    )
     session.commit()
     session.refresh(tax_return)
     return return_to_read(session, tax_return)

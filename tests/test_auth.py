@@ -15,7 +15,7 @@ SISWA_A = "siswa1@smkn1-pku.local"
 def test_login_success_returns_tokens(client: TestClient) -> None:
     resp = client.post(
         "/api/v1/auth/login",
-        json={"email": ADMIN_A, "password": "Password123!"},
+        json={"identifier": ADMIN_A, "password": "Password123!"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -27,7 +27,7 @@ def test_login_success_returns_tokens(client: TestClient) -> None:
 def test_login_wrong_password_returns_401(client: TestClient) -> None:
     resp = client.post(
         "/api/v1/auth/login",
-        json={"email": ADMIN_A, "password": "wrong-password"},
+        json={"identifier": ADMIN_A, "password": "wrong-password"},
     )
     assert resp.status_code == 401
 
@@ -109,7 +109,7 @@ def test_superadmin_create_user_rejects_invalid_tenant(client: TestClient) -> No
 def test_refresh_returns_new_access_token(client: TestClient) -> None:
     tokens = client.post(
         "/api/v1/auth/login",
-        json={"email": ADMIN_A, "password": "Password123!"},
+        json={"identifier": ADMIN_A, "password": "Password123!"},
     ).json()
     resp = client.post(
         "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
