@@ -20,7 +20,7 @@ pada *apa isinya dan mengapa dibuat begitu*.
 8. [Enumerasi](#8-enumerasi)
 9. [Model RBAC & Multi-Tenancy](#9-model-rbac--multi-tenancy)
 10. [Referensi API Lengkap](#10-referensi-api-lengkap)
-11. [Modul e-Bupot (BP21 / BP26)](#11-modul-e-bupot-bp21--bp26)
+11. [Modul e-Bupot (BP21 / BP23 / BP26)](#11-modul-e-bupot-bp21--bp23--bp26)
 12. [Mesin Perhitungan Pajak](#12-mesin-perhitungan-pajak)
 13. [Import / Export](#13-import--export)
 14. [Migrasi Database (Alembic)](#14-migrasi-database-alembic)
@@ -29,6 +29,7 @@ pada *apa isinya dan mengapa dibuat begitu*.
 17. [Konvensi Kode](#17-konvensi-kode)
 18. [Cara Menambah Fitur Baru](#18-cara-menambah-fitur-baru)
 19. [Catatan Teknis & Utang Teknis](#19-catatan-teknis--utang-teknis)
+A. [Modul e-Faktur, SPT, Billing & Audit](#a-modul-e-faktur-spt-billing--audit)
 
 ---
 
@@ -94,15 +95,27 @@ backend/
 │   │   ├── base.py               # TimestampMixin (created_at/updated_at)
 │   │   ├── enums.py              # semua StrEnum bersama
 │   │   ├── tenant.py, user.py, school_class.py, enrollment.py
-│   │   ├── slip.py               # WithholdingSlip (satu tabel untuk BP21 & BP26)
+│   │   ├── slip.py               # WithholdingSlip (satu tabel untuk BP21/BP23/BP26)
+│   │   ├── tax_invoice.py        # TaxInvoice + TaxInvoiceLine (Faktur Keluaran)
+│   │   ├── tax_input_invoice.py  # TaxInputInvoice + TaxInputLine (Faktur Masukan)
+│   │   ├── tax_return.py         # TaxReturn + TaxReturnLine (SPT Masa)
+│   │   ├── billing.py            # BillingCode (kode billing + pay + PDF)
+│   │   ├── audit_log.py          # AuditLog (jejak submit/review/pay)
 │   │   └── tarif_pajak.py        # TierPtkp, TarifProgresifPasal17
 │   ├── schemas/                  # Pydantic request/response (terpisah dari tabel)
 │   │   ├── auth.py, user.py, tenant.py, school_class.py
 │   │   ├── slip.py, tarif_pajak.py, dashboard.py
+│   │   ├── tax_invoice.py, tax_input_invoice.py, tax_return.py, billing.py, audit.py
 │   └── routers/
 │       ├── auth.py, tenants.py, users.py, classes.py
-│       ├── slips.py              # factory make_slip_router() → bp21_router, bp26_router
+│       ├── slips.py              # factory make_slip_router() → bp21_router, bp23_router, bp26_router
+│       ├── tax_invoices.py       # /faktur-keluaran + line CRUD
+│       ├── tax_input_invoices.py # /faktur-masukan + credit/uncredit/bulk
+│       ├── tax_returns.py        # /spt (posting/pernyataan/submit/pembetulan/billing/review)
+│       ├── billings.py           # /billings (list/detail/pdf/pay)
+│       ├── audit.py              # /audit-logs
 │       ├── tarif_pajak.py, dashboard.py
+│       └── services: spt.py (agregasi SPT), kjs.py (KAP-KJS), billing_pdf.py (PDF), audit.py
 ├── tests/                        # conftest + 4 file uji
 ├── docker-compose.yml            # PostgreSQL 16 lokal
 ├── alembic.ini
@@ -161,7 +174,9 @@ Alur `create_app()`:
 2. Buat `FastAPI(title="Simulator Pajak — API", version="0.1.0", lifespan=lifespan)`.
 3. Pasang `CORSMiddleware` (`allow_credentials=True`, semua metode & header).
 4. Daftarkan router dengan prefix `/api/v1`:
-   `auth`, `tenants`, `users`, `classes`, `bp21`, `bp26`, `tarif_pajak`, `dashboard`.
+   `auth`, `tenants`, `users`, `classes`, `bp21`, `bp23`, `bp26`,
+   `faktur-keluaran`, `faktur-masukan`, `spt`, `billings`, `audit-logs`,
+   `tarif_pajak`, `dashboard`.
 5. Endpoint `GET /health` (di luar prefix) → `{"status": "ok"}`, tag `meta`.
 
 **Lifespan:** bila `AUTO_SEED=true`, `seed_if_empty()` dipanggil sekali saat startup.
@@ -213,8 +228,13 @@ tenants ─┬──< users ─────< enrollments >───── classe
          │      └── (guru_id) ──────────────────┘
          │
          ├──< classes
-         └──< withholding_slips >── users (siswa_id, created_by_id)
-                                 └── classes (class_id, nullable)
+         ├──< withholding_slips >── users (siswa_id, created_by_id)
+         │                        └── classes (class_id, nullable)
+         ├──< tax_invoices >── tax_invoice_lines
+         ├──< tax_input_invoices >── tax_input_lines
+         ├──< tax_returns >── tax_return_lines
+         ├──< billing_codes (nullable spt_id → tax_returns)
+         └──< audit_logs
 
 tarif_ptkp        (referensi global, tanpa tenant)
 tarif_progresif   (referensi global, tanpa tenant)
@@ -280,8 +300,8 @@ Constraint `uq_enrollments_class_siswa` — unik `(class_id, siswa_id)`.
 
 ### `withholding_slips` (model `WithholdingSlip`)
 
-**Satu tabel untuk semua jenis bupot.** BP21 (PPh 21, penerima dalam negeri) dan BP26
-(PPh 26, penerima luar negeri) berbagi struktur & siklus hidup yang identik; keduanya
+**Satu tabel untuk semua jenis bupot.** BP21 (PPh 21), BP23 (PPh 23), dan BP26
+(PPh 26) berbagi struktur & siklus hidup yang identik; ketiganya
 hanya berbeda pada *nilai data*. Kolom `slip_type` murni diskriminator — semua kolom bisa
 dipakai semua tipe.
 
@@ -290,7 +310,7 @@ dipakai semua tipe.
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | PK | |
-| `slip_type` | enum `slip_type`, index | `bp21` \| `bp26` |
+| `slip_type` | enum `slip_type`, index | `bp21` \| `bp23` \| `bp26` |
 | `tenant_id` | FK → tenants, `CASCADE`, index | |
 | `class_id` | FK → classes, `SET NULL`, nullable, index | |
 | `siswa_id` | FK → users, `CASCADE`, index | Pemilik dokumen |
@@ -373,6 +393,18 @@ Unik `(status_kode, tahun_pajak)`.
 BIGINT diperlukan karena lapisan tertinggi Pasal 17 dimulai di 5.000.000.000 (melebihi
 INT4). Ini isi migrasi `25c389d80451`.
 
+### Tabel dokumen pajak & pendukung (ringkas)
+
+Semua tabel di bawah memakai `TimestampMixin` + `tenant_id` (tenant-scoped) kecuali tarif:
+
+- `tax_invoices` (`TaxInvoice`) + `tax_invoice_lines` (`TaxInvoiceLine`): Faktur Keluaran. Status `draft`/`issued`/`invalid`, kind `normal`/`pengganti`/`dibatalkan`, line type `barang`/`jasa`, buyer identity `npwp`/`nik`/`paspor`/`identitas_lain`. Uang integer, hitung server (DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12). Skor + feedback review seperti slip.
+- `tax_input_invoices` (`TaxInputInvoice`) + `tax_input_lines`: Faktur Masukan. Status sama; `credit_status` `not_credited`/`credited` menentukan agregasi ke SPT Bagian II. Cancel admin-only.
+- `tax_returns` (`TaxReturn`) + `tax_return_lines` (`TaxReturnLine`): SPT Masa. `return_type` `ppn`/`pph_unifikasi`, `kind` `normal`/`pembetulan`, `status` `draft`/`awaiting_payment`/`reported`. Alur: create → posting (agregasi via `services/spt.py`) → pernyataan (`wajib_pajak`/`kuasa_wajib_pajak`) → submit (buat billing bila kurang bayar) → pembetulan → billing.
+- `billing_codes` (`BillingCode`): 15-digit `{KAP-KJS:6}{MM:2}{YY:2}{serial:5}`, `status` `unpaid`/`paid`, nullable `spt_id`. PDF via `services/billing_pdf.py`, KAP-KJS via `services/kjs.py`.
+- `audit_logs` (`AuditLog`): jejak `submit`/`review`/`pay` via `services/audit.py` (`log_action`).
+
+Detail endpoint tiap modul: lihat Lampiran A di akhir dokumen.
+
 ---
 
 ## 8. Enumerasi
@@ -382,13 +414,23 @@ disimpan sebagai enum native PostgreSQL).
 
 | Enum | Nama tipe PG | Nilai |
 |---|---|---|
-| `TenantType` | `tenant_type` | `smk`, `kampus`, `lembaga` |
+| `TenantType` | `tenant_type` | `smk`, `kampus`, `lembaga`, `pt` |
 | `Role` | `user_role` | `superadmin`, `admin`, `guru`, `siswa` |
-| `SlipType` | `slip_type` | `bp21`, `bp26` |
+| `SlipType` | `slip_type` | `bp21`, `bp23`, `bp26` |
 | `SlipStatus` | `slip_status` | `draft`, `issued`, `invalid` |
 | `SlipTaxNature` | `slip_tax_nature` | `final`, `non_final` |
 | `SlipTaxFacility` | `slip_tax_facility` | `none`, `dtp`, `skb`, `rate_0` |
 | `SlipSptFlag` | `slip_spt_flag` | `reported_in_spt`, `objection_in_progress`, `objection_completed`, `objection_rejected_formal`, `objection_withdrawal_review`, `objection_withdrawal_accepted`, `spt_audited`, `spt_legal_process` |
+| `TaxInvoiceStatus` | `tax_invoice_status` | `draft`, `issued`, `invalid` |
+| `TaxInvoiceKind` | — | `normal`, `pengganti`, `dibatalkan` |
+| `TaxInvoiceLineType` | — | `barang`, `jasa` |
+| `BuyerIdentityType` | — | `npwp`, `nik`, `paspor`, `identitas_lain` |
+| `TaxInputCreditStatus` | — | `not_credited`, `credited` |
+| `TaxReturnType` | `tax_return_type` | `ppn`, `pph_unifikasi` |
+| `TaxReturnKind` | — | `normal`, `pembetulan` |
+| `TaxReturnStatus` | — | `draft`, `awaiting_payment`, `reported` |
+| `SignerCapacity` | — | `wajib_pajak`, `kuasa_wajib_pajak` |
+| `BillingStatus` | `billing_status` | `unpaid`, `paid` |
 
 > Menambah nilai enum di PostgreSQL memerlukan migrasi Alembic eksplisit
 > (`ALTER TYPE ... ADD VALUE`) — autogenerate tidak menangkapnya.
@@ -418,6 +460,14 @@ disimpan sebagai enum native PostgreSQL).
 | bupot: baca | semua | tenantnya | kelas yang diajar | miliknya |
 | bupot: buat/ubah/hapus/terbit | ✅ | ✅ (tenant) | ✅ (wajib pilih kelas) | ✅ (miliknya) |
 | bupot: review / invalidate / spt-flag | ✅ | ✅ | ✅ | ❌ |
+| faktur keluaran/masukan: baca | semua | tenantnya | kelas yang diajar | miliknya |
+| faktur: buat/ubah/hapus/terbit/credit | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
+| faktur: review (masukan cancel admin-only) | ✅ | ✅ | ✅ | ❌ |
+| spt: baca/buat/posting/pernyataan/submit/pembetulan | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
+| spt: review | ✅ | ✅ | ✅ | ❌ |
+| billings: baca/pdf | semua | tenantnya | kelas yang diajar | miliknya |
+| billings: pay | ✅ | ✅ | ✅ | ✅ (miliknya) |
+| audit-logs: baca | ✅ | ✅ | ❌ | ❌ |
 | `/tarif-pajak` baca | ✅ | ✅ | ✅ | ✅ |
 | `/tarif-pajak` tulis | ✅ | ❌ | ❌ | ❌ |
 
@@ -458,6 +508,7 @@ Autentikasi: header `Authorization: Bearer <access_token>`.
 | POST | `/login` | — | `LoginRequest{email, password, tenant_slug?}` | `TokenPair{access_token, refresh_token, token_type}` |
 | POST | `/refresh` | — | `RefreshRequest{refresh_token}` | `AccessTokenResponse{access_token, token_type}` |
 | GET | `/me` | ✅ | — | `MeResponse{id, email, full_name, role, tenant_id, tenant_name, is_active}` |
+| POST | `/change-password` | ✅ | `ChangePassword{old_password, new_password(min 8)}` | `MeResponse` |
 
 **Resolusi login (`_resolve_login_user`)** — penting untuk frontend:
 
@@ -546,25 +597,27 @@ Validasi bracket (`_validate_bracket`):
   → **409**. `batas_atas = NULL` diperlakukan sebagai `10**30` untuk pemeriksaan overlap.
 - Bracket non-aktif dilewati pemeriksaan overlap.
 
-### BP21 / BP26
+### BP21 / BP23 / BP26
 
-Lihat §11 — set endpoint identik, keduanya dibangun dari factory yang sama.
+Lihat §11 — set endpoint identik, ketiganya dibangun dari factory yang sama. Detail
+faktur/SPT/billing/audit: lihat Lampiran A.
 
 ---
 
-## 11. Modul e-Bupot (BP21 / BP26)
+## 11. Modul e-Bupot (BP21 / BP23 / BP26)
 
 `app/routers/slips.py` mendefinisikan `make_slip_router(slip_type, label)` yang menghasilkan
 set endpoint lengkap untuk satu jenis bupot. Di akhir file:
 
 ```python
 bp21_router = make_slip_router(SlipType.bp21, "BP21")
+bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
 ```
 
-Menambah jenis bupot baru = satu nilai enum + satu pemanggilan factory (+ migrasi enum).
+Menambah jenis bupot baru (mis. BPPU/BPNR) = satu nilai enum + satu pemanggilan factory (+ migrasi enum).
 
-### Daftar endpoint (`{t}` = `bp21` atau `bp26`)
+### Daftar endpoint (`{t}` = `bp21`, `bp23`, atau `bp26`)
 
 | Metode | Path | Peran | Keterangan |
 |---|---|---|---|
@@ -636,13 +689,13 @@ Aturan transisi:
 | `PATCH /{id}/spt-flag` | `issued` | Set/kosongkan `spt_flag` | **409** |
 | `PATCH /{id}/review` | apa pun | Set `score` dan/atau `teacher_feedback` | — |
 
-**Format nomor pemotongan:**
+**Format nomor pemotongan (simulasi, bukan nomor DJP):**
 
 ```
-{LABEL}-{tax_year}{tax_month:02d}-{id:06d}     contoh: BP21-202601-000042
+SIM-{LABEL}-{tax_year}{tax_month:02d}-{id:06d}     contoh: SIM-BP21-202601-000042
 ```
 
-Kolom `withholding_number` unik di level database.
+Prefix `SIM-` menandai data belajar. Kolom `withholding_number` unik di level database.
 
 ### Validasi cakupan tulis (`resolve_slip_scope`)
 
@@ -690,16 +743,32 @@ calculate_income_tax(dpp, rate_bp, facility)
 
 ### Pemilihan metode (`_resolve_income_tax`)
 
-Urutan prioritas:
+Urutan prioritas (Fase 2 mengembalikan `(pajak, metode)` dan menyimpan `calculation_method`):
 
-1. **Fasilitas `skb` / `rate_0` → PPh = 0.** Selalu menang.
-2. **BP21 + `non_final`** → coba tarif progresif Pasal 17 (lihat di bawah).
+1. **Fasilitas `skb` / `rate_0` → PPh = 0** (`nol_skb`). Selalu menang.
+2. **BP21 + `non_final` + `ter_category` A/B/C + bulan 1–11 → SIM-TER** (`ter`).
+   Desember menolak TER (422) dan wajib progresif — sesuai aturan Coretax.
+3. **BP21 + `non_final`** → coba tarif progresif Pasal 17 (`progresif`).
    Bila berhasil, hasilnya dipakai.
-3. **BP26 + `non_final` + `negara_treaty` terisi + `tarif_treaty_basis_points` terisi**
-   → `dpp × tarif_treaty_bp / 10000`.
-4. **Fallback** → `dpp × rate_bp / 10000`.
+4. **BP26 + `non_final` + `negara_treaty` terisi + `tarif_treaty_basis_points` terisi**
+   → `dpp × tarif_treaty_bp / 10000` (`treaty`).
+5. **BP23 tanpa NPWP (16 nol) → tarif ×2** (`flat_x2`), selain itu **fallback** → `dpp × rate_bp / 10000` (`flat`).
 
 > Fasilitas `dtp` dan `none` **tidak** mengubah perhitungan saat ini (`dtp` hanya penanda).
+
+### SIM-TER BP21 (`SIM_TER_RATES`, `_calculate_ter_tax`)
+
+Disederhanakan untuk belajar (bukan tarif resmi). Kategori A: TK/0, TK/1, K/0 ·
+B: TK/2, TK/3, K/1, K/2 · C: K/3. Tiap entri `(batas_atas_bruto, tarif_bp)`:
+
+- A: ≤5jt 0%, ≤10jt 1%, ≤20jt 2%, >20jt 3%
+- B: ≤5jt 0%, ≤10jt 0,5%, ≤20jt 1,5%, >20jt 2,5%
+- C: ≤5jt 0%, ≤10jt 0%, ≤20jt 1%, >20jt 2%
+
+Kolom `ter_category` (A/B/C, nullable) + `calculation_method`
+(`ter`/`progresif`/`flat`/`flat_x2`/`treaty`/`nol_skb`) tersimpan di
+`withholding_slips` (migrasi `f7a8b9c0d1e2`). Frontend menampilkan label metode
+di create (`SIM-TER Jan–Nov`) dan kolom Metode di list.
 
 ### Tarif progresif BP21 (`_calculate_bp21_progressive_tax`)
 
@@ -776,13 +845,13 @@ bulanan    = 325.000
 Mengembalikan file XML contoh (`Content-Disposition: attachment`) berisi satu elemen baris
 dengan nilai contoh yang berbeda per jenis:
 
-| Field | BP21 | BP26 |
-|---|---|---|
-| `tax_type` | `PPh 21` | `PPh 26` |
-| `tax_object_code` | `21-100-01` | `27-100-01` |
-| `tax_nature` | `non_final` | `final` |
-| `rate_percent` | `5` | `20` |
-| `kap_kjs` | `411121-100` | `411127-100` |
+| Field | BP21 | BP23 | BP26 |
+|---|---|---|---|
+| `tax_type` | `PPh 21` | `PPh 23` | `PPh 26` |
+| `tax_object_code` | `21-100-01` | `23-100-01` | `27-100-01` |
+| `tax_nature` | `non_final` | `non_final` | `final` |
+| `rate_percent` | `5` | `2` | `20` |
+| `kap_kjs` | `411121-100` | `411124-100` | `411127-100` |
 
 ### `POST /{t}/import-xml`
 
@@ -805,7 +874,7 @@ Multipart, field `file`. Struktur yang diterima:
 </Bp21List>
 ```
 
-Nama elemen root/baris: `Bp21List`/`Bp21`, `Bp26List`/`Bp26` (dari `label.capitalize()`).
+Nama elemen root/baris: `Bp21List`/`Bp21`, `Bp23List`/`Bp23`, `Bp26List`/`Bp26` (dari `label.capitalize()`).
 
 Perilaku:
 
@@ -904,10 +973,12 @@ uv run alembic history                            # riwayat
 - Migrasi data / backfill.
 - Perubahan `ON DELETE` pada foreign key.
 
-> `alembic/env.py` mengimpor `Enrollment, SchoolClass, Tenant, User, WithholdingSlip` dari
-> `app.models`. Karena `app/models/__init__.py` juga mengimpor `TierPtkp` dan
-> `TarifProgresifPasal17`, metadata tetap lengkap — tapi bila menambah model baru,
-> pastikan model itu terdaftar di `app/models/__init__.py`.
+> `alembic/env.py` mengimpor model dari
+> `app.models` (`Tenant, User, SchoolClass, Enrollment, WithholdingSlip, TaxInvoice,
+> TaxInputInvoice, TaxReturn, BillingCode, AuditLog, TierPtkp, TarifProgresifPasal17`
+> via `app/models/__init__.py`). Bila menambah model baru,
+> pastikan model itu terdaftar di `app/models/__init__.py`. Rantai revisi di atas
+> hanya contoh awal — lihat `alembic history` untuk daftar aktual (mencakup faktur, SPT, billing, audit).
 
 ---
 
@@ -1039,15 +1110,18 @@ Lint: `uv run ruff check .`
 6. Daftarkan router di `app/main.py`.
 7. Tulis tes yang setidaknya menguji: happy path, penolakan lintas tenant, dan penolakan peran.
 
-### Menambah jenis bupot baru (mis. BP23)
+### Menambah jenis bupot baru (mis. BPPU — BP23 sudah ada sebagai contoh)
 
-1. Tambah `bp23 = "bp23"` di `SlipType`.
-2. Tulis migrasi manual: `ALTER TYPE slip_type ADD VALUE 'bp23'`.
-3. Tambah `bp23_router = make_slip_router(SlipType.bp23, "BP23")` di `slips.py`.
+BP23 sudah terdaftar (`bp23_router = make_slip_router(SlipType.bp23, "BP23")` di `slips.py`
++ `bp23 = "bp23"` di `SlipType`). Untuk varian berikutnya (mis. BPPU/BPNR):
+
+1. Tambah `bppu = "bppu"` di `SlipType`.
+2. Tulis migrasi manual: `ALTER TYPE slip_type ADD VALUE 'bppu'`.
+3. Tambah `bppu_router = make_slip_router(SlipType.bppu, "BPPU")` di `slips.py`.
 4. Daftarkan di `main.py`.
 5. Bila perhitungannya berbeda, tambahkan cabang di `_resolve_income_tax()`.
 
-Bila BP23 butuh kolom yang belum ada, tambahkan ke `WithholdingSlip` sebagai nullable —
+Bila varian baru butuh kolom yang belum ada, tambahkan ke `WithholdingSlip` sebagai nullable —
 desainnya memang satu tabel lebar bersama.
 
 ### Menambah tahun tarif pajak
@@ -1065,7 +1139,7 @@ Tambahkan tahun ke `TARIF_YEARS` di `app/seed.py`, atau isi lewat endpoint
 |---|---|---|
 | bcrypt di-pin `<4.1` | Sengaja | passlib 1.7.4 membaca `bcrypt.__about__.__version__` yang dihapus di 4.1+. Hashing tetap jalan tanpa pin, tapi ada warning berisik saat startup |
 | `str` alih-alih `EmailStr` | Sengaja | `email-validator` menolak TLD cadangan seperti `.local` yang dipakai akun seed non-routable. Divalidasi dengan pola ringan |
-| Satu tabel `withholding_slips` | Sengaja | BP21 & BP26 identik secara struktural; diskriminator `slip_type` jauh lebih murah daripada dua tabel + dua router |
+| Satu tabel `withholding_slips` | Sengaja | BP21/BP23/BP26 identik secara struktural; diskriminator `slip_type` jauh lebih murah daripada tiga tabel + tiga router |
 | `CORS_ORIGINS` sebagai `str` | Sengaja | Mencegah pydantic-settings mencoba JSON-decode nilai dari `.env` |
 | 404 untuk resource tak berhak | Sengaja | Tidak membocorkan keberadaan dokumen milik tenant/siswa lain |
 | Basis points untuk persen | Sengaja | Menjaga aritmatika rupiah tetap integer & eksak |
@@ -1099,8 +1173,13 @@ Tambahkan tahun ke `TARIF_YEARS` di `app/seed.py`, atau isi lewat endpoint
 
 ### Peta jalan yang direncanakan
 
-Faktur pajak simulasi · bupot PPh 23 · kode billing · SPT simulasi · pembuatan PDF ·
-penilaian yang diperluas · laporan.
+**Sudah done:** e-Bupot BP21/BP23/BP26, e-Faktur Keluaran/Masukan, SPT Masa PPN + PPh Unifikasi,
+kode billing + pay + PDF, audit trail, penilaian per-dokumen.
+
+**Berikutnya:** BPPU/BPNR & varian Unifikasi (PPh 15/22/4(2), setor-sendiri, digunggung), TER PPh 21,
+retur / dokumen lain / prepopulated, SPT Tahunan OP/Badan, billing mandiri + Buku Besar,
+Profil WP/NPWP-NITKU, LMS (gradebook agregat, bank soal, ujian, rapor, notifikasi, QR).
+Lihat `reports/Analisis Gap PajakSim vs Coretax.md` untuk analisis gap penuh.
 
 ---
 
@@ -1112,6 +1191,7 @@ GET    /health
 POST   /api/v1/auth/login
 POST   /api/v1/auth/refresh
 GET    /api/v1/auth/me
+POST   /api/v1/auth/change-password
 
 GET    /api/v1/tenants
 POST   /api/v1/tenants
@@ -1125,6 +1205,8 @@ GET    /api/v1/classes
 POST   /api/v1/classes
 GET    /api/v1/classes/{class_id}
 POST   /api/v1/classes/{class_id}/enrollments
+DELETE /api/v1/classes/{class_id}/enrollments (lihat routers/classes.py)
+PATCH  /api/v1/classes/{class_id}/archive
 
 GET    /api/v1/dashboard/summary
 
@@ -1137,7 +1219,7 @@ POST   /api/v1/tarif-pajak/progresif
 PATCH  /api/v1/tarif-pajak/progresif/{bracket_id}
 DELETE /api/v1/tarif-pajak/progresif/{bracket_id}
 
-# {t} ∈ {bp21, bp26}
+# {t} ∈ {bp21, bp23, bp26}
 GET    /api/v1/{t}
 GET    /api/v1/{t}/summary
 GET    /api/v1/{t}/import-template
@@ -1155,3 +1237,40 @@ POST   /api/v1/{t}/{slip_id}/invalidate
 PATCH  /api/v1/{t}/{slip_id}/spt-flag
 PATCH  /api/v1/{t}/{slip_id}/review
 ```
+
+---
+
+## A. Modul e-Faktur, SPT, Billing & Audit
+
+Ringkasan pola (otorisasi + tenancy mengikuti §9; uang integer + basis points mengikuti §12):
+
+**Faktur Keluaran** (`app/routers/tax_invoices.py`, prefix `/faktur-keluaran`):
+`GET /`, `GET /summary`, `GET /export-csv`, `POST /` (draft + hitung server),
+`POST /bulk-issue`, `GET|PATCH|DELETE /{invoice_id}` (ubah/hapus hanya draft),
+`POST /{invoice_id}/issue`, `POST /{invoice_id}/cancel`, `PATCH /{invoice_id}/review`,
+line CRUD `POST /{invoice_id}/lines`, `PATCH|DELETE /{invoice_id}/lines/{line_id}`.
+Lifecycle `draft → issued` / `invalid`; kind `normal`/`pengganti`/`dibatalkan`.
+
+**Faktur Masukan** (`app/routers/tax_input_invoices.py`, prefix `/faktur-masukan`):
+`GET /`, `GET /summary`, `GET /export-csv`, `POST /`,
+`POST /bulk-credit|bulk-uncredit|bulk-delete`,
+`GET|PATCH|DELETE /{invoice_id}`,
+`POST /{invoice_id}/credit|uncredit`, `POST /{invoice_id}/cancel` (admin-only),
+`PATCH /{invoice_id}/review`, line CRUD sama. `credit_status` menggerakkan agregasi SPT.
+
+**SPT Masa** (`app/routers/tax_returns.py`, prefix `/spt`, service `app/services/spt.py`):
+`GET /`, `GET /summary`, `POST /` (konsep draft, `return_type` `ppn`/`pph_unifikasi`),
+`GET /{return_id}`, `POST /{return_id}/posting` (agregasi idempoten),
+`POST /{return_id}/pernyataan` (signer `wajib_pajak`/`kuasa_wajib_pajak`),
+`POST /{return_id}/submit` (buat billing bila kurang bayar),
+`POST /{return_id}/pembetulan`, `DELETE /{return_id}` (draft saja),
+`GET /{return_id}/billing`, `PATCH /{return_id}/review`.
+Status `draft`/`awaiting_payment`/`reported`.
+
+**Billing & PDF** (`app/routers/billings.py`, service `billing_pdf.py`, `kjs.py`):
+`GET /billings`, `GET /billings/{billing_id}`,
+`GET /billings/{billing_id}/pdf`, `POST /billings/{billing_id}/pay`.
+`BillingCode` 15-digit, `unpaid` → `paid` (SPT terkait menjadi `reported`).
+
+**Audit** (`app/routers/audit.py`, service `audit.py`):
+`GET /audit-logs` (admin/superadmin). Ditulis pada submit/review/pay.

@@ -1,8 +1,13 @@
 """Simulated e-Bupot withholding slip routes — one factory for all slip types.
 
-BP21 and BP26 are the same form with different data values, so both mount the
-identical endpoint set; ``slip_type`` scopes every query. Adding a new bupot
-type is one enum value + one ``make_slip_router`` call.
+BP21, BP23 and BP26 share the same form shape with different data values, so all
+mount the identical endpoint set; ``slip_type`` scopes every query. Adding a new
+bupot type is one enum value + one ``make_slip_router`` call.
+
+Learning scope (Fase 1+2): numbers are clearly simulated (``SIM-`` prefix), identity
+formats (NPWP 16 / NITKU 22) and kode objek ↔ tarif ↔ KAP-KJS are validated
+educationally, SKB requires a document number and treaty requires SKD data.
+Fase 2 adds SIM-TER (A/B/C, Jan–Nov) vs progresif Desember for BP21.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from app.schemas.slip import (
     SlipImportResult,
     SlipImportRowResult,
     SlipInvalidate,
+    SlipIssue,
     SlipListResponse,
     SlipRead,
     SlipReview,
@@ -53,6 +59,183 @@ MAX_IMPORT_BYTES = 1_000_000
 MAX_IMPORT_ROWS = 500
 MAX_EXPORT_ROWS = 5_000
 
+#: Prefix that marks every generated number as simulated learning data.
+SIM_NUMBER_PREFIX = "SIM-"
+
+#: Learning matrix: kode objek → (rate_percent, kap_kjs). Only the codes students
+#: must recognise for SMK/kuliah practice; Coretax has dozens more.
+TAX_OBJECT_MATRIX: dict[str, dict[str, tuple[float, str]]] = {
+    SlipType.bp21.value: {
+        "21-100-01": (5.0, "411121-100"),
+        "21-100-02": (5.0, "411121-100"),
+        "21-100-09": (5.0, "411121-100"),
+        "21-401-01": (5.0, "411121-100"),
+        "21-401-02": (5.0, "411121-100"),
+        "21-499-99": (5.0, "411121-100"),
+    },
+    SlipType.bp23.value: {
+        "24-100-01": (15.0, "411124-100"),
+        "24-101-01": (15.0, "411124-102"),
+        "24-103-01": (15.0, "411124-103"),
+        "24-102-01": (2.0, "411124-104"),
+        "24-104-01": (2.0, "411124-104"),
+    },
+    SlipType.bp26.value: {
+        "27-100-01": (20.0, "411127-100"),
+        "27-100-02": (20.0, "411127-101"),
+        "27-100-03": (20.0, "411127-102"),
+        "27-100-04": (20.0, "411127-104"),
+        "27-100-05": (20.0, "411127-100"),
+    },
+    # Unifikasi minimal untuk belajar (subset PPh 23/26 + setor-sendiri/digunggung).
+    SlipType.bppu.value: {
+        "24-100-01": (15.0, "411124-100"),
+        "24-102-01": (2.0, "411124-104"),
+        "24-104-01": (2.0, "411124-104"),
+    },
+    SlipType.bpnr.value: {
+        "27-100-01": (20.0, "411127-100"),
+        "27-100-04": (20.0, "411127-104"),
+    },
+    SlipType.sp.value: {
+        "24-100-01": (15.0, "411124-100"),
+        "24-102-01": (2.0, "411124-104"),
+    },
+    SlipType.cy.value: {
+        "24-100-01": (15.0, "411124-100"),
+        "27-100-01": (20.0, "411127-100"),
+    },
+}
+
+#: SIM-TER (disederhanakan untuk belajar, bukan tarif resmi).
+#: Kategori A: TK/0, TK/1, K/0 · B: TK/2, TK/3, K/1, K/2 · C: K/3.
+#: Tiap entri = (batas_atas_bruto, tarif_basis_points). Batas None = tak terbatas.
+SIM_TER_RATES: dict[str, list[tuple[int | None, int]]] = {
+    "A": [(5_000_000, 0), (10_000_000, 100), (20_000_000, 200), (None, 300)],
+    "B": [(5_000_000, 0), (10_000_000, 50), (20_000_000, 150), (None, 250)],
+    "C": [(5_000_000, 0), (10_000_000, 0), (20_000_000, 100), (None, 200)],
+}
+
+TER_CATEGORIES = ("A", "B", "C")
+
+
+def _calculate_ter_tax(gross_income: int, ter_category: str | None) -> int | None:
+    """SIM-TER monthly tax for BP21 Jan–Nov. Returns None for unknown category."""
+    if not ter_category or ter_category not in SIM_TER_RATES:
+        return None
+    for upper, rate_bp in SIM_TER_RATES[ter_category]:
+        if upper is None or gross_income <= upper:
+            return apply_basis_points(gross_income, rate_bp)
+    return None
+
+
+def _validate_learning_fields(
+    *,
+    slip_type: SlipType,
+    recipient_identity_number: str | None,
+    withholder_npwp: str | None = None,
+    withholder_nitku: str | None = None,
+    recipient_nitku: str | None = None,
+    document_nitku: str | None = None,
+    tax_object_code: str | None = None,
+    rate_percent: float | None = None,
+    kap_kjs: str | None = None,
+    tax_facility: SlipTaxFacility | None = None,
+    document_number: str | None = None,
+    negara_treaty: str | None = None,
+    pasal_treaty: str | None = None,
+    nomor_skd: str | None = None,
+    tarif_treaty_basis_points: int | None = None,
+    ter_category: str | None = None,
+    tax_month: int | None = None,
+) -> None:
+    """Educational validation mirroring Coretax rules (simplified for SMK/kuliah).
+
+    Raises 422 with Indonesian messages so students learn the format, not just
+    presence. BP23 without NPWP (16 zeros) is allowed and handled by the x2 rate.
+    BP26 allows foreign TIN/passport (non-digit identity).
+    """
+
+    def _fail(detail: str) -> None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail
+        )
+
+    if recipient_identity_number is not None:
+        ident = recipient_identity_number.strip()
+        if slip_type in (SlipType.bp21, SlipType.bp23, SlipType.bppu, SlipType.sp, SlipType.cy):
+            if not ident.isdigit() or len(ident) != 16:
+                _fail("Nomor identitas penerima harus 16 digit (NPWP 16 / NIK).")
+        elif slip_type in (SlipType.bp26, SlipType.bpnr):
+            if not ident:
+                _fail("Nomor identitas penerima wajib diisi (TIN / paspor).")
+
+    for label, value in (
+        ("NPWP pemotong", withholder_npwp),
+        ("NITKU pemotong", withholder_nitku),
+        ("NITKU penerima", recipient_nitku),
+        ("NITKU dokumen", document_nitku),
+    ):
+        if value is None or str(value).strip() == "":
+            continue
+        text = str(value).strip()
+        if "NITKU" in label:
+            if not text.isdigit() or len(text) != 22:
+                _fail(f"{label} harus 22 digit bila diisi.")
+        else:
+            if not text.isdigit() or len(text) not in (15, 16):
+                _fail(f"{label} harus 15 atau 16 digit bila diisi.")
+
+    if tax_object_code is not None:
+        matrix = TAX_OBJECT_MATRIX.get(slip_type.value, {})
+        expected = matrix.get(tax_object_code)
+        if expected is None:
+            allowed = ", ".join(sorted(matrix))
+            _fail(f"Kode objek {tax_object_code} belum dipelajari. Pilih: {allowed}.")
+        exp_rate, exp_kap = expected
+        if rate_percent is not None and abs(float(rate_percent) - exp_rate) > 1e-9:
+            _fail(f"Tarif untuk {tax_object_code} harus {exp_rate:g}%.")
+        if kap_kjs is not None and str(kap_kjs).strip() != "" and str(kap_kjs).strip() != exp_kap:
+            _fail(f"KAP-KJS untuk {tax_object_code} harus {exp_kap}.")
+
+    if tax_facility == SlipTaxFacility.skb and not (document_number or "").strip():
+        _fail("Fasilitas SKB wajib mencantumkan nomor dokumen SKB.")
+
+    treaty_used = tarif_treaty_basis_points is not None
+    if treaty_used and slip_type in (SlipType.bp26, SlipType.bpnr):
+        if not (negara_treaty or "").strip():
+            _fail("Treaty wajib mencantumkan negara treaty.")
+        if not (nomor_skd or "").strip():
+            _fail("Treaty wajib mencantumkan nomor SKD.")
+
+    if ter_category is not None and str(ter_category).strip() != "":
+        if slip_type != SlipType.bp21:
+            _fail("Kategori TER hanya untuk BP21.")
+        cat = str(ter_category).strip().upper()
+        if cat not in TER_CATEGORIES:
+            _fail("Kategori TER harus A, B, atau C.")
+        if tax_month == 12:
+            _fail("TER hanya untuk Jan–Nov; Desember wajib progresif.")
+
+#: Header aliases from the official converter (students may paste those names).
+#: Maps alias → internal field. Only the few students actually meet in class.
+HEADER_ALIASES = {
+    "masa_pajak": "tax_month",
+    "tahun_pajak": "tax_year",
+    "nik": "recipient_identity_number",
+    "npwp": "recipient_identity_number",
+    "nomor_identitas": "recipient_identity_number",
+    "nama": "recipient_name",
+    "kode_objek": "tax_object_code",
+    "kode_objek_pajak": "tax_object_code",
+    "bruto": "gross_income",
+    "penghasilan_bruto": "gross_income",
+    "tarif": "rate_percent",
+    "dpp": "dpp_percent",
+    "nomor_dokumen": "document_number",
+    "jenis_dokumen": "document_type",
+}
+
 _IMPORT_FIELDS = (
     "class_id",
     "tax_month",
@@ -65,6 +248,7 @@ _IMPORT_FIELDS = (
     "recipient_address",
     "recipient_nitku",
     "ptkp_status",
+    "ter_category",
     "tax_type",
     "tax_object_code",
     "tax_object_name",
@@ -91,6 +275,8 @@ _CSV_COLUMNS = (
     "Nomor Pemotongan",
     "Status",
     "Status Tanda Tangan Elektronik",
+    "Penandatangan",
+    "Metode Hitung",
     "NITKU/Nomor Identitas Sub Unit Organisasi",
     "Jenis Pajak",
     "Kode Objek Pajak",
@@ -176,9 +362,23 @@ def _resolve_income_tax(
     negara_treaty: str | None,
     tarif_treaty_basis_points: int | None,
     recipient_identity_number: str | None,
-) -> int:
+    ter_category: str | None = None,
+    tax_month: int | None = None,
+) -> tuple[int, str]:
     if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
-        return 0
+        return 0, "nol_skb"
+
+    if (
+        slip_type == SlipType.bp21
+        and tax_nature == SlipTaxNature.non_final
+        and ter_category
+        and str(ter_category).strip().upper() in TER_CATEGORIES
+        and tax_month is not None
+        and 1 <= tax_month <= 11
+    ):
+        ter_tax = _calculate_ter_tax(gross_income, str(ter_category).strip().upper())
+        if ter_tax is not None:
+            return ter_tax, "ter"
 
     if slip_type == SlipType.bp21 and tax_nature == SlipTaxNature.non_final:
         progressive_tax = _calculate_bp21_progressive_tax(
@@ -188,23 +388,24 @@ def _resolve_income_tax(
             tax_year=tax_year,
         )
         if progressive_tax is not None:
-            return progressive_tax
+            return progressive_tax, "progresif"
 
     if (
-        slip_type == SlipType.bp26
+        slip_type in (SlipType.bp26, SlipType.bpnr)
         and tax_nature == SlipTaxNature.non_final
         and negara_treaty
         and tarif_treaty_basis_points is not None
     ):
-        return _tax_by_basis_points(dpp, tarif_treaty_basis_points)
+        return _tax_by_basis_points(dpp, tarif_treaty_basis_points), "treaty"
 
     final_rate_basis_points = rate_basis_points
-    if slip_type == SlipType.bp23 and (
+    if slip_type in (SlipType.bp23, SlipType.bppu, SlipType.sp, SlipType.cy) and (
         not recipient_identity_number or recipient_identity_number.startswith("0000000000000000")
     ):
         final_rate_basis_points *= 2
+        return calculate_income_tax(dpp, final_rate_basis_points, tax_facility), "flat_x2"
 
-    return calculate_income_tax(dpp, final_rate_basis_points, tax_facility)
+    return calculate_income_tax(dpp, final_rate_basis_points, tax_facility), "flat"
 
 
 # --- shared access / lifecycle helpers ---------------------------------------
@@ -221,11 +422,23 @@ def slip_to_read(slip: WithholdingSlip) -> SlipRead:
     )
 
 
-def issue_slip(slip: WithholdingSlip, label: str) -> None:
+def issue_slip(
+    slip: WithholdingSlip,
+    label: str,
+    *,
+    signer_id: int | None = None,
+    signer_name: str | None = None,
+) -> None:
     slip.status = SlipStatus.issued
     slip.issued_at = datetime.now(UTC)
     slip.electronic_signature_status = "signed"
-    slip.withholding_number = f"{label}-{slip.tax_year}{slip.tax_month:02d}-{slip.id:06d}"
+    slip.withholding_number = (
+        f"{SIM_NUMBER_PREFIX}{label}-{slip.tax_year}{slip.tax_month:02d}-{slip.id:06d}"
+    )
+    if signer_id is not None:
+        slip.signer_id = signer_id
+    if signer_name:
+        slip.signer_name = signer_name
 
 
 def can_read_slip(session: Session, current_user: User, slip: WithholdingSlip) -> bool:
@@ -298,6 +511,25 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         data: SlipCreate, current_user: CurrentUser, session: SessionDep
     ) -> WithholdingSlip:
         """Validate scope and construct an unsaved draft slip from a create payload."""
+        _validate_learning_fields(
+            slip_type=slip_type,
+            recipient_identity_number=data.recipient_identity_number,
+            withholder_npwp=data.withholder_npwp,
+            withholder_nitku=data.withholder_nitku,
+            recipient_nitku=data.recipient_nitku,
+            document_nitku=data.document_nitku,
+            tax_object_code=data.tax_object_code,
+            rate_percent=data.rate_percent,
+            kap_kjs=data.kap_kjs,
+            tax_facility=data.tax_facility,
+            document_number=data.document_number,
+            negara_treaty=data.negara_treaty,
+            pasal_treaty=data.pasal_treaty,
+            nomor_skd=data.nomor_skd,
+            tarif_treaty_basis_points=data.tarif_treaty_basis_points,
+            ter_category=data.ter_category,
+            tax_month=data.tax_month,
+        )
         tenant_id, class_id, siswa_id = resolve_document_scope(
             session=session,
             current_user=current_user,
@@ -308,6 +540,22 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         rate_basis_points = percent_to_basis_points(data.rate_percent)
         dpp_rate_basis_points = percent_to_basis_points(data.dpp_percent)
         dpp = calculate_dpp(data.gross_income, dpp_rate_basis_points)
+        income_tax, calculation_method = _resolve_income_tax(
+            session,
+            slip_type=slip_type,
+            tax_nature=data.tax_nature,
+            tax_facility=data.tax_facility,
+            gross_income=data.gross_income,
+            dpp=dpp,
+            rate_basis_points=rate_basis_points,
+            ptkp_status=data.ptkp_status,
+            tax_year=data.tax_year,
+            negara_treaty=data.negara_treaty,
+            tarif_treaty_basis_points=data.tarif_treaty_basis_points,
+            recipient_identity_number=data.recipient_identity_number,
+            ter_category=data.ter_category,
+            tax_month=data.tax_month,
+        )
         payload = data.model_dump(exclude={"class_id", "siswa_id", "dpp_percent", "rate_percent"})
         return WithholdingSlip(
             **payload,
@@ -319,20 +567,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             dpp=dpp,
             dpp_rate_basis_points=dpp_rate_basis_points,
             rate_basis_points=rate_basis_points,
-            income_tax=_resolve_income_tax(
-                session,
-                slip_type=slip_type,
-                tax_nature=data.tax_nature,
-                tax_facility=data.tax_facility,
-                gross_income=data.gross_income,
-                dpp=dpp,
-                rate_basis_points=rate_basis_points,
-                ptkp_status=data.ptkp_status,
-                tax_year=data.tax_year,
-                negara_treaty=data.negara_treaty,
-                tarif_treaty_basis_points=data.tarif_treaty_basis_points,
-                recipient_identity_number=data.recipient_identity_number,
-            ),
+            income_tax=income_tax,
+            calculation_method=calculation_method,
         )
 
     def _export_slips(current_user: CurrentUser, session: SessionDep, conditions: list):
@@ -426,23 +662,56 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         """Download the XML import format expected by POST /{type}/import-xml."""
         example = ET.Element(f"{xml_tag}List")
         row = ET.SubElement(example, xml_tag)
+        if slip_type == SlipType.bp26:
+            sample_tax_type = "PPh 26"
+            sample_code = "27-100-01"
+            sample_name = "Dividen yang diterima WPLN"
+            sample_nature = "final"
+            sample_rate = "20"
+            sample_kap = "411127-100"
+        elif slip_type == SlipType.bp23:
+            sample_tax_type = "PPh 23"
+            sample_code = "24-100-01"
+            sample_name = "Dividen"
+            sample_nature = "non_final"
+            sample_rate = "15"
+            sample_kap = "411124-100"
+        elif slip_type in (SlipType.bppu, SlipType.sp, SlipType.cy):
+            sample_tax_type = "PPh 23"
+            sample_code = "24-100-01"
+            sample_name = "Dividen (Unifikasi simulasi)"
+            sample_nature = "non_final"
+            sample_rate = "15"
+            sample_kap = "411124-100"
+        elif slip_type == SlipType.bpnr:
+            sample_tax_type = "PPh 26"
+            sample_code = "27-100-01"
+            sample_name = "Dividen WPLN (BPNR simulasi)"
+            sample_nature = "final"
+            sample_rate = "20"
+            sample_kap = "411127-100"
+        else:
+            sample_tax_type = "PPh 21"
+            sample_code = "21-100-09"
+            sample_name = "Honorarium tenaga ahli"
+            sample_nature = "non_final"
+            sample_rate = "5"
+            sample_kap = "411121-100"
         samples = {
             "class_id": "",
             "tax_month": "1",
             "tax_year": "2026",
             "recipient_identity_number": "1234567890123456",
             "recipient_name": "JOHN DOE",
-            "tax_type": "PPh 26" if slip_type == SlipType.bp26 else "PPh 21",
-            "tax_object_code": "27-100-01" if slip_type == SlipType.bp26 else "21-100-01",
-            "tax_object_name": "Dividen yang diterima WPLN"
-            if slip_type == SlipType.bp26
-            else "Imbalan kepada bukan pegawai",
-            "tax_nature": "final" if slip_type == SlipType.bp26 else "non_final",
+            "tax_type": sample_tax_type,
+            "tax_object_code": sample_code,
+            "tax_object_name": sample_name,
+            "tax_nature": sample_nature,
             "tax_facility": "none",
             "gross_income": "10000000",
             "dpp_percent": "100",
-            "rate_percent": "20" if slip_type == SlipType.bp26 else "5",
-            "kap_kjs": "411127-100" if slip_type == SlipType.bp26 else "411121-100",
+            "rate_percent": sample_rate,
+            "kap_kjs": sample_kap,
             "negara_treaty": "",
             "pasal_treaty": "",
             "nomor_skd": "",
@@ -488,6 +757,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                     slip.withholding_number or "",
                     slip.status.value,
                     slip.electronic_signature_status,
+                    slip.signer_name or "",
+                    slip.calculation_method or "",
                     slip.document_nitku or "",
                     slip.tax_type or "",
                     slip.tax_object_code,
@@ -568,10 +839,18 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         results: list[SlipImportRowResult] = []
         for index, row in enumerate(rows, start=1):
             values: dict[str, str] = {}
-            for field in _IMPORT_FIELDS:
-                node = row.find(field)
-                if node is not None and node.text is not None and node.text.strip() != "":
-                    values[field] = node.text.strip()
+            for child in row:
+                tag = (child.tag or "").strip()
+                if not tag or child.text is None or child.text.strip() == "":
+                    continue
+                key = tag
+                if key not in _IMPORT_FIELDS:
+                    alias = HEADER_ALIASES.get(tag.strip().lower().replace(" ", "_"))
+                    if alias is None:
+                        continue
+                    key = alias
+                if key not in values:
+                    values[key] = child.text.strip()
             try:
                 data = SlipCreate.model_validate(values)
                 slip = _build_slip(data, current_user, session)
@@ -647,7 +926,12 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                     SlipImportRowResult(row=slip_id, success=False, error=f"{label} bukan draft")
                 )
                 continue
-            issue_slip(slip, label)
+            issue_slip(
+                slip,
+                label,
+                signer_id=current_user.id,
+                signer_name=current_user.full_name,
+            )
             session.add(slip)
             session.commit()
             session.refresh(slip)
@@ -693,8 +977,27 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             if field in {"class_id", "siswa_id"}:
                 continue
             setattr(slip, field, value)
+        _validate_learning_fields(
+            slip_type=slip_type,
+            recipient_identity_number=slip.recipient_identity_number,
+            withholder_npwp=slip.withholder_npwp,
+            withholder_nitku=slip.withholder_nitku,
+            recipient_nitku=slip.recipient_nitku,
+            document_nitku=slip.document_nitku,
+            tax_object_code=slip.tax_object_code,
+            rate_percent=basis_points_to_percent(slip.rate_basis_points),
+            kap_kjs=slip.kap_kjs,
+            tax_facility=slip.tax_facility,
+            document_number=slip.document_number,
+            negara_treaty=slip.negara_treaty,
+            pasal_treaty=slip.pasal_treaty,
+            nomor_skd=slip.nomor_skd,
+            tarif_treaty_basis_points=slip.tarif_treaty_basis_points,
+            ter_category=slip.ter_category,
+            tax_month=slip.tax_month,
+        )
         slip.dpp = calculate_dpp(slip.gross_income, slip.dpp_rate_basis_points)
-        slip.income_tax = _resolve_income_tax(
+        income_tax, calculation_method = _resolve_income_tax(
             session,
             slip_type=slip_type,
             tax_nature=slip.tax_nature,
@@ -707,7 +1010,11 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             negara_treaty=slip.negara_treaty,
             tarif_treaty_basis_points=slip.tarif_treaty_basis_points,
             recipient_identity_number=slip.recipient_identity_number,
+            ter_category=slip.ter_category,
+            tax_month=slip.tax_month,
         )
+        slip.income_tax = income_tax
+        slip.calculation_method = calculation_method
         session.add(slip)
         session.commit()
         session.refresh(slip)
@@ -736,15 +1043,50 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         session.delete(slip)
         session.commit()
 
+    @router.get("/{slip_id}/pdf", dependencies=[_roles])
+    def download_slip_pdf(
+        slip_id: int, current_user: CurrentUser, session: SessionDep
+    ) -> Response:
+        """Unduh BPE simulasi (PDF + QR internal) untuk dokumen terbit."""
+        from app.services.slip_pdf import render_slip_pdf
+
+        slip = _get_accessible_slip(slip_id, current_user, session)
+        if slip.status != SlipStatus.issued:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"BPE simulasi hanya untuk {label} yang telah terbit",
+            )
+        pdf_bytes = render_slip_pdf(slip, label)
+        filename = slip.withholding_number or f"{label}-{slip.id}"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="BPE-SIM-{filename}.pdf"'},
+        )
+
     @router.post("/{slip_id}/issue", response_model=SlipRead, dependencies=[_write_roles])
-    def issue(slip_id: int, current_user: CurrentUser, session: SessionDep) -> SlipRead:
+    def issue(
+        slip_id: int,
+        current_user: CurrentUser,
+        session: SessionDep,
+        data: SlipIssue | None = None,
+    ) -> SlipRead:
         slip = _get_accessible_slip(slip_id, current_user, session)
         if slip.status != SlipStatus.draft:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=f"{label} bukan draft"
             )
 
-        issue_slip(slip, label)
+        signer_name = (
+            (data.signer_name if data and data.signer_name else None) or current_user.full_name
+        )
+        if data and data.kode_otorisasi is not None and str(data.kode_otorisasi).strip() != "":
+            if len(str(data.kode_otorisasi).strip()) < 6:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Kode Otorisasi simulasi minimal 6 karakter",
+                )
+        issue_slip(slip, label, signer_id=current_user.id, signer_name=signer_name)
         session.add(slip)
         log_action(
             session,
@@ -858,3 +1200,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
 bp21_router = make_slip_router(SlipType.bp21, "BP21")
 bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
+bppu_router = make_slip_router(SlipType.bppu, "BPPU")
+bpnr_router = make_slip_router(SlipType.bpnr, "BPNR")
+sp_router = make_slip_router(SlipType.sp, "SP")
+cy_router = make_slip_router(SlipType.cy, "CY")

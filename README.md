@@ -1,6 +1,6 @@
 # Simulator Pajak — Backend
 
-FastAPI + SQLModel backend for a multi-tenant **tax administration learning simulator** for Indonesian schools (SMK), universities, and training institutions. The backend now covers the platform foundation plus simulated e-Bupot BP21/BP26 workflows and editable tax tariff reference data.
+FastAPI + SQLModel backend for a multi-tenant **tax administration learning simulator** for Indonesian schools (SMK), universities, and training institutions. The backend now covers the platform foundation plus simulated e-Bupot BP21/BP23/BP26 workflows, e-Faktur Keluaran/Masukan, SPT Masa PPN + PPh Unifikasi, kode billing + pembayaran + PDF, audit trail, and editable tax tariff reference data.
 
 The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nuxt + Nuxt UI).
 
@@ -18,9 +18,13 @@ The frontend lives in a **separate repository**: `pajak-simulator-frontend` (Nux
 ## Current module coverage
 
 - Platform foundation: JWT auth, refresh tokens, RBAC, tenant isolation, users, classes, enrollments, role-shaped dashboard summaries.
-- Simulated e-Bupot: BP21 and BP26 withholding slips backed by one `withholding_slips` table with `slip_type` as discriminator.
+- Simulated e-Bupot: BP21, BP23, BP26, BPPU, BPNR, SP, CY withholding slips backed by one `withholding_slips` table with `slip_type` as discriminator (`slips.py` factory `make_slip_router`). Numbers prefixed `SIM-`; BP21 supports SIM-TER (A/B/C Jan–Nov) vs progresif Desember with `calculation_method`; issue records signer + Kode Otorisasi simulasi and offers BPE-SIM PDF.
+- Simulated e-Faktur: Faktur Keluaran (`/faktur-keluaran`) and Faktur Masukan (`/faktur-masukan`) with lines, issue/cancel, credit/uncredit, review/score.
+- Simulated SPT Masa: PPN + PPh Unifikasi + PPh 21/26 (`/spt`, types `ppn` / `pph_unifikasi` / `pph21_26`) with posting, pernyataan, submit, pembetulan, billing linkage, review.
+- Billing & payment: server-side `BillingCode` (`/billings`), pay flow, PDF generation (`billing_pdf.py`), KAP-KJS helper (`kjs.py`).
+- Audit trail: `AuditLog` (`/audit-logs`) for submit/review/pay actions.
 - Tax reference data: PTKP tiers and Pasal 17 progressive brackets used by BP21 non-final calculations.
-- Classroom workflow: siswa create/issue slips, guru/admin review and score, tenant scoping enforced server-side.
+- Classroom workflow: siswa create/issue slips/faktur/SPT, guru/admin review and score, tenant scoping enforced server-side.
 
 ## Prerequisites
 
@@ -137,32 +141,34 @@ If the test database is unreachable the suite skips with an explanatory message.
 
 ## Simulated e-Bupot modules
 
-The backend includes national tax portal-inspired e-Bupot simulator workflows for **BP21** and **BP26**. Both modules share the same endpoint set and schema; the router scopes records by `slip_type`.
+The backend includes national tax portal-inspired e-Bupot simulator workflows for **BP21, BP23, BP26, BPPU, BPNR, SP, CY**. All seven modules share the same endpoint set and schema via `make_slip_router(SlipType, label)`; the router scopes records by `slip_type`.
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/v1/{bp21\|bp26}` | List documents with status/class/student/month/year/facility filters |
-| GET | `/api/v1/{bp21\|bp26}/summary` | Count draft, issued, invalid, and total documents |
-| POST | `/api/v1/{bp21\|bp26}` | Create a draft and calculate PPh automatically |
-| GET | `/api/v1/{bp21\|bp26}/{slip_id}` | Read one document |
-| PATCH | `/api/v1/{bp21\|bp26}/{slip_id}` | Update a draft document |
-| DELETE | `/api/v1/{bp21\|bp26}/{slip_id}` | Delete a draft document |
-| POST | `/api/v1/{bp21\|bp26}/{slip_id}/issue` | Publish a draft and generate a withholding number |
-| POST | `/api/v1/{bp21\|bp26}/{slip_id}/cancel` | Cancel an issued document into invalid status |
-| POST | `/api/v1/{bp21\|bp26}/{slip_id}/invalidate` | Mark a document invalid (superadmin/admin/guru) |
-| PATCH | `/api/v1/{bp21\|bp26}/{slip_id}/spt-flag` | Set issued-document SPT/objection lifecycle flag |
-| PATCH | `/api/v1/{bp21\|bp26}/{slip_id}/review` | Add score and teacher feedback |
-| GET | `/api/v1/{bp21\|bp26}/import-template` | Download XML import template |
-| POST | `/api/v1/{bp21\|bp26}/import-xml` | Import draft documents from XML |
-| POST | `/api/v1/{bp21\|bp26}/bulk-issue` | Issue multiple drafts in one operation |
-| GET | `/api/v1/{bp21\|bp26}/export-csv` | Export accessible documents as CSV |
-| GET | `/api/v1/{bp21\|bp26}/export-xml` | Export accessible documents as XML |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}` | List documents with status/class/student/month/year/facility filters |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/summary` | Count draft, issued, invalid, and total documents |
+| POST | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}` | Create a draft and calculate PPh automatically |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}` | Read one document |
+| PATCH | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}` | Update a draft document |
+| DELETE | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}` | Delete a draft document |
+| POST | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}/issue` | Publish with signer + Kode Otorisasi simulasi, generate `SIM-` number |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}/pdf` | Download BPE-SIM PDF + QR |
+| POST | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}/cancel` | Cancel an issued document into invalid status |
+| POST | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}/invalidate` | Mark a document invalid (superadmin/admin/guru) |
+| PATCH | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}/spt-flag` | Set issued-document SPT/objection lifecycle flag |
+| PATCH | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/{slip_id}/review` | Add score and teacher feedback |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/import-template` | Download XML import template |
+| POST | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/import-xml` | Import draft documents from XML (plus converter header aliases) |
+| POST | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/bulk-issue` | Issue multiple drafts in one operation |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/export-csv` | Export accessible documents as CSV |
+| GET | `/api/v1/{bp21\|bp23\|bp26\|bppu\|bpnr\|sp\|cy}/export-xml` | Export accessible documents as XML |
 
 Tax calculation behavior:
 
-- BP21 non-final uses PTKP and Pasal 17 progressive annual brackets when matching active tariff data exists.
-- BP26 non-final can apply treaty rates when treaty country and tariff fields are present.
-- `skb` and `rate_0` facilities force income tax to zero.
+- BP21 non-final: SIM-TER (A/B/C, Jan–Nov) or PTKP + Pasal 17 progressive (Desember); `calculation_method` stored per slip.
+- BP26/BPNR non-final can apply treaty rates when treaty country + SKD + tariff present.
+- BP23/BPPU/SP/CY without NPWP (16 zeros) doubles the rate.
+- `skb` and `rate_0` facilities force income tax to zero (SKB requires document number).
 
 Tax tariff endpoints:
 
@@ -184,8 +190,37 @@ Access follows the existing tenancy/RBAC pattern:
 - `admin`: manage documents inside their own tenant.
 - `superadmin`: global read/review access.
 
+## Simulated e-Faktur modules
+
+- **Faktur Keluaran** (`/api/v1/faktur-keluaran`): list, summary, export-csv, create (draft + server-side DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12), bulk-issue, get/patch/delete draft, issue, cancel, review, plus line CRUD (`/{id}/lines`, `/{id}/lines/{line_id}`).
+- **Faktur Masukan** (`/api/v1/faktur-masukan`): list, summary, export-csv, create, bulk-credit/uncredit/delete, get/patch/delete, credit/uncredit, cancel (admin-only), review, plus line CRUD. `credit_status` (`not_credited` / `credited`) drives SPT aggregation.
+
+## Simulated SPT Masa module
+
+SPT Masa PPN + PPh Unifikasi + PPh 21/26 (`/api/v1/spt`, `TaxReturnType`: `ppn`, `pph_unifikasi`, `pph21_26`; `TaxReturnKind`: `normal`, `pembetulan`; `TaxReturnStatus`: `draft`, `awaiting_payment`, `reported`):
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/spt` | List returns |
+| GET | `/api/v1/spt/summary` | Counts by status/type |
+| POST | `/api/v1/spt` | Create konsep (draft) |
+| GET | `/api/v1/spt/{return_id}` | Read one + lines |
+| POST | `/api/v1/spt/{return_id}/posting` | Aggregate faktur/slip into lines (idempotent) |
+| POST | `/api/v1/spt/{return_id}/pernyataan` | Sign statement (`wajib_pajak` / `kuasa_wajib_pajak`) |
+| POST | `/api/v1/spt/{return_id}/submit` | Submit; creates billing server-side if kurang bayar |
+| POST | `/api/v1/spt/{return_id}/pembetulan` | Correction (same-row new version) |
+| GET | `/api/v1/spt/{return_id}/billing` | Linked billing code |
+| PATCH | `/api/v1/spt/{return_id}/review` | Score + feedback (guru/admin) |
+| DELETE | `/api/v1/spt/{return_id}` | Delete draft |
+
+## Billing, payment, PDF & audit
+
+- **Billings** (`/api/v1/billings`): list, detail, PDF (`/{billing_id}/pdf` via `billing_pdf.py`), pay (`/{billing_id}/pay` → `paid`, SPT becomes `reported`). `BillingCode` is a 15-digit `{KAP-KJS:6}{MM:2}{YY:2}{serial:5}`, `BillingStatus` `unpaid` / `paid`.
+- **Billing mandiri** (`POST /api/v1/billings`): Layanan Mandiri Kode Billing — one code, one KAP-KJS (whitelist 5 in `services/kjs.py` + human labels), one `masa_pajak` MMYYYY (no future), one `amount` 1..9.999.999.999, optional `uraian` ≤200. `spt_id=NULL`, payable/printable via existing endpoints, expiry display 14 hari (PENG-4/PJ/2025, no cron). Siswa self; admin/guru specify same-tenant siswa; superadmin read-only.
+- **Audit logs** (`/api/v1/audit-logs`, admin/superadmin): `GET` list of `AuditLog` entries written on SPT submit/review/pay.
+
 ## Scope & what's next
 
-**Done:** multi-tenant auth (login/refresh/me), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, simulated e-Bupot BP21/BP26 workflows, PTKP/progressive tariff management, seed data, Alembic migrations, smoke tests.
+**Done:** multi-tenant auth (login/refresh/me/change-password), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, simulated e-Bupot BP21/BP23/BP26/BPPU/BPNR/SP/CY (SIM-TER, signer + BPE-SIM PDF, Bukti Potong Saya), e-Faktur Keluaran/Masukan, SPT Masa PPN + PPh Unifikasi + PPh 21/26 (posting/pernyataan/submit/pembetulan/billing), kode billing + pay + PDF generation, audit trail, PTKP/progressive tariff management, seed data, Alembic migrations, smoke tests.
 
-**Next phases:** faktur pajak simulasi, bupot PPh 23, kode billing, SPT simulasi, PDF generation, expanded grading, reports. All future tenant-scoped tables should carry `tenant_id` and reuse the same server-side tenancy pattern.
+**Next phases:** retur / dokumen lain / prepopulated e-Faktur, SPT Tahunan OP/Badan, billing mandiri + Buku Besar, Profil WP/NPWP-NITKU, LMS (gradebook, bank soal, ujian, rapor, notifikasi). All future tenant-scoped tables should carry `tenant_id` and reuse the same server-side tenancy pattern.

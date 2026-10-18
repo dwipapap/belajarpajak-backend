@@ -1,6 +1,6 @@
 """Simulated e-Bupot withholding slip model — one table for all form types.
 
-BP21 (PPh 21, domestic recipients) and BP26 (PPh 26, foreign recipients) share
+BP21 (PPh 21), BP23 (PPh 23) and BP26 (PPh 26) share
 the same simulated slip structure and lifecycle; they differ only in
 data values (recipient identity, rates, final vs non-final). ``slip_type`` is a
 plain discriminator — every column is usable by every type.
@@ -65,6 +65,19 @@ class WithholdingSlip(TimestampMixin, table=True):
     recipient_nitku: str | None = Field(default=None, max_length=32)
 
     ptkp_status: str | None = Field(default=None, max_length=10)
+
+    #: SIM-TER category for learning (A/B/C). Only for BP21 Jan–Nov; December
+    #: must use progressive. None = progressive/flat fallback (backward compat).
+    ter_category: str | None = Field(default=None, max_length=1)
+    #: How income_tax was derived: "ter" | "progresif" | "flat" | "treaty" | "flat_x2" | "nol_skb".
+    calculation_method: str | None = Field(default=None, max_length=20)
+
+    #: Signer (penandatangan) simulation: who signed at issue time.
+    signer_id: int | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True),
+    )
+    signer_name: str | None = Field(default=None, max_length=150)
 
     tax_type: str | None = Field(default=None, max_length=30)
     tax_object_code: str = Field(max_length=30)

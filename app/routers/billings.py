@@ -20,7 +20,7 @@ from app.models.enums import BillingStatus, Role, TaxReturnStatus
 from app.models.school_class import SchoolClass
 from app.models.tax_return import TaxReturn
 from app.models.user import User
-from app.schemas.tax_return import BillingListResponse, BillingRead
+from app.schemas.tax_return import BillingCreate, BillingListResponse, BillingRead
 
 router = APIRouter(prefix="/billings", tags=["billings"])
 
@@ -104,6 +104,98 @@ def list_billings(
         items=[BillingRead.model_validate(item.model_dump()) for item in items],
         total=total,
     )
+
+
+@router.post(
+    "",
+    response_model=BillingRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_write_roles],
+)
+def create_mandiri_billing(
+    data: BillingCreate,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> BillingRead:
+    """Layanan Mandiri Kode Billing — one code, one KAP-KJS, one period, one amount.
+
+    Never linked to an SPT (``spt_id=None``); payable and printable through the
+    existing endpoints. YAGNI: no multi-KAP, deposit, Pbk, or expiry cron —
+    expiry is a display label (created_at + 14 hari per PENG-4/PJ/2025).
+    """
+    from datetime import UTC
+
+    from app.services import kjs as kjs_service
+    from app.services import spt as spt_service
+    from app.services.audit import log_action
+
+    if not kjs_service.is_mandiri_kjs(data.kap_kjs):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"KAP-KJS {data.kap_kjs} belum tersedia untuk billing mandiri",
+        )
+    try:
+        tax_month, tax_year = kjs_service.parse_masa_pajak(data.masa_pajak)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    today = datetime.now(tz=UTC)
+    if (tax_year, tax_month) > (today.year, today.month):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Masa pajak tidak boleh masa depan",
+        )
+
+    if current_user.role == Role.siswa:
+        siswa = current_user
+    else:
+        if data.siswa_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Pilih siswa untuk billing mandiri ini",
+            )
+        siswa = session.get(User, data.siswa_id)
+        if (
+            siswa is None
+            or siswa.role != Role.siswa
+            or siswa.tenant_id != current_user.tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Siswa tidak ditemukan di institusi Anda",
+            )
+
+    billing = BillingCode(
+        tenant_id=current_user.tenant_id,
+        siswa_id=siswa.id,
+        spt_id=None,
+        code=spt_service.generate_code(
+            session,
+            tenant_id=current_user.tenant_id,
+            tax_month=tax_month,
+            tax_year=tax_year,
+            kap_kjs=data.kap_kjs,
+        ),
+        amount=data.amount,
+        kap_kjs=data.kap_kjs,
+        masa_pajak=data.masa_pajak,
+        uraian=(data.uraian.strip() if data.uraian and data.uraian.strip() else None),
+    )
+    session.add(billing)
+    session.flush()
+    log_action(
+        session,
+        actor=current_user,
+        action="billing.create",
+        entity="billing",
+        entity_id=billing.id,
+        tenant_id=billing.tenant_id,
+        summary=f"Membuat kode billing mandiri {billing.code} ({billing.kap_kjs})",
+    )
+    session.commit()
+    session.refresh(billing)
+    return BillingRead.model_validate(billing.model_dump())
 
 
 @router.get("/{billing_id}", response_model=BillingRead, dependencies=[_roles])

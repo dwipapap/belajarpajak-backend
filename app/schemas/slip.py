@@ -1,8 +1,8 @@
 """Schemas for simulated e-Bupot withholding slip workflows (all slip types).
 
-One shared field set: BP21 and BP26 forms are structurally identical here,
-so both endpoints accept and return every field; a field the form doesn't use is
-simply null.
+One shared field set: BP21, BP23 and BP26 forms are structurally identical here,
+so all endpoints accept and return every field; a field the form doesn't use is
+simply null. Numbers are prefixed SIM- to mark simulated learning data.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ class SlipBase(BaseModel):
     recipient_nitku: str | None = Field(default=None, max_length=32)
 
     ptkp_status: str | None = Field(default=None, max_length=10)
+    ter_category: str | None = Field(default=None, max_length=1)
 
     tax_type: str | None = Field(default=None, max_length=30)
     tax_object_code: str = Field(max_length=30)
@@ -78,6 +79,7 @@ class SlipUpdate(BaseModel):
     recipient_nitku: str | None = Field(default=None, max_length=32)
 
     ptkp_status: str | None = Field(default=None, max_length=10)
+    ter_category: str | None = Field(default=None, max_length=1)
 
     tax_type: str | None = Field(default=None, max_length=30)
     tax_object_code: str | None = Field(default=None, max_length=30)
@@ -115,6 +117,17 @@ class SlipCancel(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class SlipIssue(BaseModel):
+    """Terbitkan dengan penandatangan simulasi.
+
+    ``signer_name`` defaults to the current user's name; ``kode_otorisasi``
+    is a learning proxy for Coretax Kode Otorisasi (min 6 chars bila diisi).
+    """
+
+    signer_name: str | None = Field(default=None, max_length=150)
+    kode_otorisasi: str | None = Field(default=None, max_length=100)
+
+
 class SlipSptFlagUpdate(BaseModel):
     spt_flag: SlipSptFlag | None = None
 
@@ -150,6 +163,12 @@ class SlipRead(BaseModel):
     recipient_nitku: str | None
 
     ptkp_status: str | None
+
+    ter_category: str | None
+    calculation_method: str | None
+
+    signer_id: int | None
+    signer_name: str | None
 
     tax_type: str | None
     tax_object_code: str

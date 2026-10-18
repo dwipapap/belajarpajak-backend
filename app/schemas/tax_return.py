@@ -138,9 +138,24 @@ class BillingRead(BaseModel):
     amount: int
     kap_kjs: str
     masa_pajak: str
+    uraian: str | None
     paid_at: datetime | None
     created_at: datetime | None
     updated_at: datetime | None
+
+
+class BillingCreate(BaseModel):
+    """Layanan Mandiri Kode Billing — one code, one KAP-KJS, one period, one amount.
+
+    ``spt_id`` is never accepted here: SPT billing is minted only by submit.
+    Siswa creates for themselves; admin/guru may specify a same-tenant siswa.
+    """
+
+    kap_kjs: str = Field(max_length=20)
+    masa_pajak: str = Field(max_length=6)
+    amount: int = Field(ge=1, le=9_999_999_999)
+    uraian: str | None = Field(default=None, max_length=200)
+    siswa_id: int | None = None
 
 
 class BillingListResponse(BaseModel):
