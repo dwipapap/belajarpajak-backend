@@ -47,6 +47,7 @@ from app.schemas.slip import (
     SlipSummary,
     SlipUpdate,
 )
+from app.services import ter as ter_service
 from app.services.audit import log_action
 
 MAX_IMPORT_BYTES = 1_000_000
@@ -180,6 +181,15 @@ def _resolve_income_tax(
     if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
         return 0
 
+    if slip_type == SlipType.bpmp:
+        # Monthly employee slip: TER rate x gross (PMK 168/2023 Art. 4).
+        # The PP 58/2023 rate table is not yet seeded, so while lookup misses
+        # the slip falls back to its explicit rate_percent — never a guess.
+        category = ter_service.ter_category_for_ptkp(ptkp_status)
+        if category is not None:
+            ter_rate = ter_service.lookup_rate(category, gross_income)
+            if ter_rate is not None:
+                return ter_service.monthly_tax(gross_income, ter_rate)
     if slip_type == SlipType.bp21 and tax_nature == SlipTaxNature.non_final:
         progressive_tax = _calculate_bp21_progressive_tax(
             session,
@@ -859,3 +869,4 @@ bp21_router = make_slip_router(SlipType.bp21, "BP21")
 bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
 bppu_router = make_slip_router(SlipType.bppu, "BPPU")
+bpmp_router = make_slip_router(SlipType.bpmp, "BPMP")

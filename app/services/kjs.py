@@ -22,13 +22,23 @@ KJS_PPH_UNIFIKASI: dict[str, list[str]] = {
 PASAL_LABELS: dict[str, str] = {
     "pasal_4_2": "Pasal 4 Ayat 2",
     "pasal_15": "Pasal 15",
+    "pasal_21": "Pasal 21",
     "pasal_22": "Pasal 22",
     "pasal_23": "Pasal 23",
     "pasal_26": "Pasal 26",
 }
 
+#: KJS groups for SPT PPh 21/26, keyed by pasal section code. Only codes already
+#: used elsewhere in the simulator appear here — no new KJS invented.
+KJS_PPH_21_26: dict[str, list[str]] = {
+    "pasal_21": ["411121-100"],
+    "pasal_26": ["411127-110", "411127-460"],
+}
 #: Single KJS for SPT Masa PPN kurang bayar.
 KJS_PPN_MASA = "411121-100"
+
+#: Fallback KJS for a BPMP slip that carries no kap_kjs (PPh 21 masa default).
+KJS_BPMP_DEFAULT = "411121-100"
 
 #: Fallback KJS for a BP23 slip that carries no kap_kjs (jasa default).
 KJS_BP23_DEFAULT = "411124-100"
@@ -39,6 +49,9 @@ KJS_BP26_DEFAULT = "411127-110"
 def pasal_for_kjs(kjs: str) -> str | None:
     """Map a KAP-KJS code back to its pasal section code, or None if unknown."""
     for pasal, codes in KJS_PPH_UNIFIKASI.items():
+        if kjs in codes:
+            return pasal
+    for pasal, codes in KJS_PPH_21_26.items():
         if kjs in codes:
             return pasal
     return None

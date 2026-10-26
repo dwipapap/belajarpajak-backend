@@ -161,26 +161,71 @@ def _ppn_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
     return lines
 
 
-def _label_for(section: str) -> str:
-    for _code, (sec, label) in PENYERAHAN_SECTIONS.items():
-        if sec == section:
-            return label
-    for _code, (sec, label) in MASUKAN_SECTIONS.items():
-        if sec == section:
-            return label
-    return section
+#: Source slips for an SPT PPh 21/26 period: monthly employee slips plus the
+#: article-26 and one-off article-21 slips of the same month.
+PPh_21_26_SOURCE_TYPES: tuple[SlipType, ...] = (SlipType.bpmp, SlipType.bp26, SlipType.bp21)
+
+
+def _pph21_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
+    """Induk rows for SPT PPh 21/26: one zero row per known KJS + aggregation.
+
+    Mirrors :func:`_pph_lines` but scoped to the monthly-slip source set and
+    grouped by the PPh 21/26 KJS catalog.
+    """
+    aggregated: dict[str, dict[str, int]] = {}
+    slips = session.exec(
+        select(WithholdingSlip).where(
+            WithholdingSlip.tenant_id == tax_return.tenant_id,
+            WithholdingSlip.siswa_id == tax_return.siswa_id,
+            WithholdingSlip.tax_year == tax_return.tax_year,
+            WithholdingSlip.tax_month == tax_return.tax_month,
+            WithholdingSlip.status == SlipStatus.issued,
+            WithholdingSlip.slip_type.in_(PPh_21_26_SOURCE_TYPES),
+        )
+    ).all()
+    for slip in slips:
+        row = aggregated.setdefault(
+            _slip_kjs(slip), {"setor_sendiri": 0, "pemotongan": 0, "ditanggung_pemerintah": 0}
+        )
+        row["pemotongan"] += slip.income_tax
+
+    lines = []
+    for pasal, kjs_codes in kjs.KJS_PPH_21_26.items():
+        for kjs_code in kjs_codes:
+            amounts = aggregated.get(
+                kjs_code,
+                {"setor_sendiri": 0, "pemotongan": 0, "ditanggung_pemerintah": 0},
+            )
+            lines.append(
+                TaxReturnLine(
+                    return_id=tax_return.id,
+                    section=pasal,
+                    code=kjs_code,
+                    description=f"KJS:{kjs_code}",
+                    setor_sendiri=amounts["setor_sendiri"],
+                    pemotongan=amounts["pemotongan"],
+                    ditanggung_pemerintah=amounts["ditanggung_pemerintah"],
+                )
+            )
+    return lines
 
 
 def _slip_pasal(slip: WithholdingSlip) -> str:
     mapped = kjs.pasal_for_kjs(slip.kap_kjs or "")
     if mapped:
         return mapped
-    return "pasal_23" if slip.slip_type == SlipType.bp23 else "pasal_26"
+    if slip.slip_type == SlipType.bp23:
+        return "pasal_23"
+    if slip.slip_type == SlipType.bpmp:
+        return "pasal_21"
+    return "pasal_26"
 
 
 def _slip_kjs(slip: WithholdingSlip) -> str:
     if slip.kap_kjs:
         return slip.kap_kjs
+    if slip.slip_type == SlipType.bpmp:
+        return kjs.KJS_BPMP_DEFAULT
     return kjs.KJS_BP26_DEFAULT if slip.slip_type == SlipType.bp26 else kjs.KJS_BP23_DEFAULT
 
 
@@ -224,6 +269,16 @@ def _pph_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
     return lines
 
 
+def _label_for(section: str) -> str:
+    for _code, (sec, label) in PENYERAHAN_SECTIONS.items():
+        if sec == section:
+            return label
+    for _code, (sec, label) in MASUKAN_SECTIONS.items():
+        if sec == section:
+            return label
+    return section
+
+
 def posting(session: Session, tax_return: TaxReturn) -> TaxReturn:
     """Recompute header amounts and replace the detail lines. Idempotent."""
     if tax_return.return_type == TaxReturnType.ppn:
@@ -249,7 +304,10 @@ def posting(session: Session, tax_return: TaxReturn) -> TaxReturn:
         tax_return.total_income_tax = 0
         tax_return.amount_due = tax_return.ppn_kurang_bayar
     else:
-        lines = _pph_lines(session, tax_return)
+        if tax_return.return_type == TaxReturnType.pph_21_26:
+            lines = _pph21_lines(session, tax_return)
+        else:
+            lines = _pph_lines(session, tax_return)
         tax_return.total_income_tax = sum(line.pemotongan for line in lines)
         tax_return.amount_due = tax_return.total_income_tax
         tax_return.penyerahan_dpp = tax_return.penyerahan_dpp_nilai_lain = 0
@@ -367,6 +425,10 @@ def mark_sources_reported(session: Session, tax_return: TaxReturn) -> None:
             invoice.spt_flag = SlipSptFlag.reported_in_spt
             session.add(invoice)
     else:
+        if tax_return.return_type == TaxReturnType.pph_21_26:
+            source_types = PPh_21_26_SOURCE_TYPES
+        else:
+            source_types = (SlipType.bp23, SlipType.bp26, SlipType.bppu)
         for slip in session.exec(
             select(WithholdingSlip).where(
                 WithholdingSlip.tenant_id == tax_return.tenant_id,
@@ -374,7 +436,7 @@ def mark_sources_reported(session: Session, tax_return: TaxReturn) -> None:
                 WithholdingSlip.tax_year == tax_return.tax_year,
                 WithholdingSlip.tax_month == tax_return.tax_month,
                 WithholdingSlip.status == SlipStatus.issued,
-                WithholdingSlip.slip_type.in_([SlipType.bp23, SlipType.bp26, SlipType.bppu]),
+                WithholdingSlip.slip_type.in_(source_types),
             )
         ).all():
             slip.spt_flag = SlipSptFlag.reported_in_spt
