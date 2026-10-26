@@ -60,7 +60,7 @@ def test_siswa_can_create_and_issue_bp21(client: TestClient) -> None:
     assert issued.status_code == 200
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
-    assert issued_body["withholding_number"].startswith("BP21-202607-")
+    assert issued_body["withholding_number"].startswith("SIM-BP21-202607-")
     assert issued_body["electronic_signature_status"] == "signed"
 
 
@@ -163,6 +163,84 @@ def test_guru_can_review_bp21_in_own_class(client: TestClient) -> None:
     body = resp.json()
     assert body["score"] == 90
     assert body["teacher_feedback"] == "Perhitungan sudah sesuai."
+
+
+def test_bp21_ter_jan_nov_uses_sim_ter(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["tax_month"] = 7
+    payload["gross_income"] = 8_000_000
+    payload["ptkp_status"] = "TK/0"
+    payload["ter_category"] = "A"
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["income_tax"] == 80_000
+    assert body["calculation_method"] == "ter"
+    assert body["ter_category"] == "A"
+
+
+def test_bp21_ter_december_rejected(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["tax_month"] = 12
+    payload["ter_category"] = "A"
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 422
+
+
+def test_bp21_ter_invalid_category_rejected(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["ter_category"] = "Z"
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 422
+
+
+def test_bp21_issue_records_signer_and_pdf(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+
+    issued = client.post(
+        f"/api/v1/bp21/{created['id']}/issue",
+        headers=headers,
+        json={"signer_name": "Guru Simulasi", "kode_otorisasi": "KO-SIM-123"},
+    )
+    assert issued.status_code == 200
+    body = issued.json()
+    assert body["signer_name"] == "Guru Simulasi"
+    assert body["signer_id"] is not None
+
+    pdf = client.get(f"/api/v1/bp21/{created['id']}/pdf", headers=headers)
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"].startswith("application/pdf")
+
+    draft = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+    pdf_draft = client.get(f"/api/v1/bp21/{draft['id']}/pdf", headers=headers)
+    assert pdf_draft.status_code == 409
+
+
+def test_bp21_issue_rejects_short_kode_otorisasi(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+
+    resp = client.post(
+        f"/api/v1/bp21/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "123"},
+    )
+    assert resp.status_code == 422
 
 
 def test_bp21_summary_counts_created_statuses_and_respects_tenant(client: TestClient) -> None:

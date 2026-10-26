@@ -57,7 +57,7 @@ def _import_xml(class_id: int, *, gross_income: str = "10000000") -> str:
     <tax_facility>none</tax_facility>
     <gross_income>{gross_income}</gross_income>
     <dpp_percent>100</dpp_percent>
-    <rate_percent>2</rate_percent>
+    <rate_percent>15</rate_percent>
     <kap_kjs>411124-100</kap_kjs>
   </Bppu>
 </BppuList>
@@ -79,7 +79,7 @@ def test_siswa_can_create_and_issue_bppu(client: TestClient) -> None:
     assert issued.status_code == 200, issued.text
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
-    assert issued_body["withholding_number"].startswith("BPPU-202607-")
+    assert issued_body["withholding_number"].startswith("SIM-BPPU-202607-")
     assert issued_body["electronic_signature_status"] == "signed"
 
 

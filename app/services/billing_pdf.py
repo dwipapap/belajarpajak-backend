@@ -165,7 +165,13 @@ def render_billing_pdf(session: Session, billing: BillingCode) -> bytes:
     pdf.drawString(margin, y, "NAMA")
     pdf.setFont("Helvetica", 10.5)
     pdf.drawString(margin + 40 * mm, y, f": WP Simulasi #{billing.siswa_id}")
-    y -= 6 * mm
+    y -= 5.6 * mm
+    if billing.uraian:
+        pdf.setFont("Helvetica-Bold", 10.5)
+        pdf.drawString(margin, y, "URAIAN")
+        pdf.setFont("Helvetica", 10.5)
+        pdf.drawString(margin + 40 * mm, y, f": {billing.uraian}")
+        y -= 5.6 * mm
 
     # --- Detail table ---
     y -= 4 * mm

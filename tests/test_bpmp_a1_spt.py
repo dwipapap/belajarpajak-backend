@@ -69,7 +69,7 @@ def test_siswa_can_create_and_issue_bpmp_with_explicit_rate(client: TestClient) 
     assert issued.status_code == 200, issued.text
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
-    assert issued_body["withholding_number"].startswith("BPMP-202504-")
+    assert issued_body["withholding_number"].startswith("SIM-BPMP-202504-")
 
 
 def test_bpmp_types_are_isolated_despite_shared_table(client: TestClient) -> None:
@@ -148,8 +148,24 @@ def test_pph_21_26_posting_aggregates_bpmp(client: TestClient) -> None:
         headers=headers,
         json={"return_type": "pph_21_26", "tax_month": 4, "tax_year": 2025},
     )
-    assert spt.status_code == 201, spt.text
-    spt_id = spt.json()["id"]
+    if spt.status_code == 409:
+        # Re-runnable against the persistent shared test DB (same get-or-create
+        # pattern as the BPPU SPT test): post to the existing period SPT.
+        existing = client.get(
+            f"{BASE}/spt",
+            headers=headers,
+            params={
+                "return_type": "pph_21_26",
+                "tax_year": 2025,
+                "tax_month": 4,
+                "size": 100,
+            },
+        )
+        assert existing.status_code == 200, existing.text
+        spt_id = existing.json()["items"][0]["id"]
+    else:
+        assert spt.status_code == 201, spt.text
+        spt_id = spt.json()["id"]
 
     posted = client.post(f"{BASE}/spt/{spt_id}/posting", headers=headers)
     assert posted.status_code == 200, posted.text

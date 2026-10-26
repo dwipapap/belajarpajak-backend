@@ -47,4 +47,6 @@ class BillingCode(TimestampMixin, table=True):
     #: KAP-KJS of the billed object (e.g. "411121-100"), or "-" for multi-KJS totals.
     kap_kjs: str = Field(default="-", max_length=20)
     masa_pajak: str = Field(max_length=6)  # MMYYYY
+    #: Free-text reference for self-service billing (Ref Tagihan di PDF).
+    uraian: str | None = Field(default=None, max_length=200)
     paid_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))

@@ -229,8 +229,18 @@ def _slip_kjs(slip: WithholdingSlip) -> str:
     return kjs.KJS_BP26_DEFAULT if slip.slip_type == SlipType.bp26 else kjs.KJS_BP23_DEFAULT
 
 
+def _is_pph21_26(return_type: TaxReturnType) -> bool:
+    """Either spelling (local ``pph_21_26`` + Fase ``pph21_26``) selects SPT 21/26."""
+    return return_type in (TaxReturnType.pph_21_26, TaxReturnType.pph21_26)
+
+
 def _pph_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
-    """Induk B rows: one zero row per known KJS, plus aggregation of issued slips."""
+    """Induk B rows: one zero row per known KJS, plus aggregation of issued slips.
+
+    pph_unifikasi aggregates BP23/BP26/BPPU. SPT PPh 21/26 under either
+    spelling is served by :func:`_pph21_lines` via :func:`posting`.
+    """
+    wanted = [SlipType.bp23, SlipType.bp26, SlipType.bppu]
     aggregated: dict[str, dict[str, int]] = {}
     slips = session.exec(
         select(WithholdingSlip).where(
@@ -239,7 +249,7 @@ def _pph_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
             WithholdingSlip.tax_year == tax_return.tax_year,
             WithholdingSlip.tax_month == tax_return.tax_month,
             WithholdingSlip.status == SlipStatus.issued,
-            WithholdingSlip.slip_type.in_([SlipType.bp23, SlipType.bp26, SlipType.bppu]),
+            WithholdingSlip.slip_type.in_(wanted),
         )
     ).all()
     for slip in slips:
@@ -304,7 +314,7 @@ def posting(session: Session, tax_return: TaxReturn) -> TaxReturn:
         tax_return.total_income_tax = 0
         tax_return.amount_due = tax_return.ppn_kurang_bayar
     else:
-        if tax_return.return_type == TaxReturnType.pph_21_26:
+        if _is_pph21_26(tax_return.return_type):
             lines = _pph21_lines(session, tax_return)
         else:
             lines = _pph_lines(session, tax_return)
@@ -336,16 +346,33 @@ def generate_billing_code(session: Session, tax_return: TaxReturn, kap_kjs: str)
     Serial runs per tenant per year; the advisory lock serialises concurrent
     generations exactly like NSFP numbering does.
     """
+    return generate_code(
+        session,
+        tenant_id=tax_return.tenant_id,
+        tax_month=tax_return.tax_month,
+        tax_year=tax_return.tax_year,
+        kap_kjs=kap_kjs,
+    )
+
+
+def generate_code(
+    session: Session, *, tenant_id: int, tax_month: int, tax_year: int, kap_kjs: str
+) -> str:
+    """Shared serial allocator for SPT and self-service billing (no duplicates).
+
+    Serial counts every 15-digit code of the tenant, so SPT and mandiri codes
+    never collide even though they serve different obligations.
+    """
     from sqlalchemy import text as sa_text
     from sqlmodel import func
 
     session.execute(
         sa_text("SELECT pg_advisory_xact_lock(:key1, :key2)"),
-        {"key1": tax_return.tenant_id, "key2": 20_000_000 + tax_return.tax_year},
+        {"key1": tenant_id, "key2": 20_000_000 + tax_year},
     )
     used = session.exec(
         select(BillingCode.code).where(
-            BillingCode.tenant_id == tax_return.tenant_id,
+            BillingCode.tenant_id == tenant_id,
             func.length(BillingCode.code) == 15,
         )
     ).all()
@@ -354,7 +381,7 @@ def generate_billing_code(session: Session, tax_return: TaxReturn, kap_kjs: str)
     if serial > 99_999:
         raise ValueError("Serial kode billing melebihi kapasitas tahun berjalan")
     digits = kap_kjs.replace("-", "")[:6].ljust(6, "0")
-    return f"{digits}{tax_return.tax_month:02d}{tax_return.tax_year % 100:02d}{serial:05d}"
+    return f"{digits}{tax_month:02d}{tax_year % 100:02d}{serial:05d}"
 
 
 def ensure_billing(session: Session, tax_return: TaxReturn) -> BillingCode:
@@ -425,7 +452,7 @@ def mark_sources_reported(session: Session, tax_return: TaxReturn) -> None:
             invoice.spt_flag = SlipSptFlag.reported_in_spt
             session.add(invoice)
     else:
-        if tax_return.return_type == TaxReturnType.pph_21_26:
+        if _is_pph21_26(tax_return.return_type):
             source_types = PPh_21_26_SOURCE_TYPES
         else:
             source_types = (SlipType.bp23, SlipType.bp26, SlipType.bppu)

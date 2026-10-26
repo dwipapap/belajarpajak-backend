@@ -114,8 +114,10 @@ def test_bulk_create_siswa_with_username_and_default_password(client: TestClient
         json={
             "role": "siswa",
             "accounts": [
-                {"full_name": "Bulk Satu", "username": f"0099988811{suffix[:2]}"},
-                {"full_name": "Bulk Dua", "username": f"0099988812{suffix[:2]}"},
+                # Full 6-hex-char suffix: the 2-char space (256 values) collides
+                # after a few runs against the shared persistent test DB.
+                {"full_name": "Bulk Satu", "username": f"0099988811{suffix}"},
+                {"full_name": "Bulk Dua", "username": f"0099988812{suffix}"},
                 # Duplicate of an existing username -> row fails, others succeed.
                 {"full_name": "Bulk Tiga", "username": "NIS00000005"},
             ],

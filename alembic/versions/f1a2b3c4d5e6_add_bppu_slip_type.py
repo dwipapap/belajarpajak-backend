@@ -21,7 +21,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TYPE slip_type ADD VALUE 'bppu'")
+    op.execute("ALTER TYPE slip_type ADD VALUE IF NOT EXISTS 'bppu'")
 
 def downgrade() -> None:
     pass

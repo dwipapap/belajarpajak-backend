@@ -88,7 +88,7 @@ def test_siswa_can_create_and_issue_bp26(client: TestClient) -> None:
     assert issued.status_code == 200
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
-    assert issued_body["withholding_number"].startswith("BP26-202607-")
+    assert issued_body["withholding_number"].startswith("SIM-BP26-202607-")
     assert issued_body["electronic_signature_status"] == "signed"
 
 
@@ -133,7 +133,11 @@ def test_bp26_update_treaty_recalculates_tax(client: TestClient) -> None:
     updated = client.patch(
         f"/api/v1/bp26/{created['id']}",
         headers=headers,
-        json={"negara_treaty": "JPN", "tarif_treaty_basis_points": 500},
+        json={
+            "negara_treaty": "JPN",
+            "nomor_skd": "SKD-2026-002",
+            "tarif_treaty_basis_points": 500,
+        },
     )
 
     assert updated.status_code == 200
@@ -326,7 +330,7 @@ def test_bulk_issue_and_export_csv(client: TestClient) -> None:
     assert export.status_code == 200
     assert export.headers["content-type"].startswith("text/csv")
     assert "Nomor Pemotongan" in export.text
-    assert f"BP26-202607-{first['id']:06d}" in export.text
+    assert f"SIM-BP26-202607-{first['id']:06d}" in export.text
 
 
 def test_slip_types_are_isolated_despite_shared_table(client: TestClient) -> None:

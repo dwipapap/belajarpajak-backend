@@ -55,3 +55,42 @@ def pasal_for_kjs(kjs: str) -> str | None:
         if kjs in codes:
             return pasal
     return None
+
+
+#: Whitelist for Layanan Mandiri Kode Billing (YAGNI: 1 code, 1 period, 1 amount).
+#: Matches what students already meet in slips — no new codes to memorise.
+#: NOTE: local PPN masa uses 411121-100 (historical); the DJP catalog number
+#: commonly cited for PPN (411211) is intentionally NOT introduced here to avoid
+#: breaking tests, PDFs, and seeded data. Dropdowns show human labels instead.
+MANDIRI_KJS: tuple[str, ...] = (
+    "411121-100",
+    "411124-100",
+    "411127-100",
+    "411128-100",
+    "411122-100",
+)
+
+MANDIRI_KJS_LABELS: dict[str, str] = {
+    "411121-100": "PPN Masa / PPh 21 Setor Sendiri",
+    "411124-100": "PPh 23",
+    "411127-100": "PPh 26",
+    "411128-100": "PPh Final 4(2)",
+    "411122-100": "PPh 22",
+}
+
+
+def is_mandiri_kjs(kap_kjs: str) -> bool:
+    """Whether a KAP-KJS code may be used for self-service billing."""
+    return kap_kjs in MANDIRI_KJS
+
+
+def parse_masa_pajak(masa_pajak: str) -> tuple[int, int]:
+    """Split MMYYYY into (month, year); raises ValueError on bad format."""
+    if len(masa_pajak) != 6 or not masa_pajak.isdigit():
+        raise ValueError("Masa pajak harus MMYYYY (6 digit)")
+    month, year = int(masa_pajak[:2]), int(masa_pajak[2:])
+    if not 1 <= month <= 12:
+        raise ValueError("Bulan masa pajak harus 01–12")
+    if not 2020 <= year <= 2100:
+        raise ValueError("Tahun masa pajak harus 2020–2100")
+    return month, year

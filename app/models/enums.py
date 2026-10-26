@@ -27,6 +27,9 @@ class SlipType(StrEnum):
     bp26 = "bp26"
     bppu = "bppu"
     bpmp = "bpmp"
+    bpnr = "bpnr"
+    sp = "sp"
+    cy = "cy"
 
 
 class SlipStatus(StrEnum):
@@ -108,7 +111,11 @@ class TaxReturnType(StrEnum):
 
     ppn = "ppn"
     pph_unifikasi = "pph_unifikasi"
+    # SPT PPh 21/26: both spellings accepted (local ``pph_21_26`` + Fase
+    # ``pph21_26``). Service helpers treat them equivalently; migrations add
+    # both enum values so either stored value validates.
     pph_21_26 = "pph_21_26"
+    pph21_26 = "pph21_26"
 
 
 class TaxReturnKind(StrEnum):
