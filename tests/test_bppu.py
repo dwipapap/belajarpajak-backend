@@ -181,13 +181,20 @@ def test_other_tenant_admin_cannot_see_bppu(client: TestClient) -> None:
 
 
 def test_pph_posting_aggregates_bppu(client: TestClient) -> None:
-    """Period 2026-05, PPh Unifikasi: a BPPU slip lands in its KAP-KJS row."""
+    """PPh Unifikasi: a BPPU slip lands in its KAP-KJS row.
+
+    Uses period 06/2025 — no other test module creates a pph_unifikasi SPT
+    there (test_spt.py uses 02-03/2026; PPN uses 2025-12 only), and a past
+    year never trips the future-period guard. Get-or-create keeps the test
+    re-runnable against the persistent shared test DB.
+    """
     headers = auth_headers(client, SISWA_A)
     class_id = _first_class_id(client, headers)
 
     payload = _bppu_payload(class_id)
-    payload["tax_month"] = 5
-    payload["document_number"] = "INV/2026/BPPU-SPT"
+    payload["tax_month"] = 6
+    payload["tax_year"] = 2025
+    payload["document_number"] = "INV/2025/BPPU-SPT"
     res = client.post(f"{BASE}/bppu", headers=headers, json=payload)
     assert res.status_code == 201, res.text
     created = res.json()
@@ -198,11 +205,26 @@ def test_pph_posting_aggregates_bppu(client: TestClient) -> None:
     spt = client.post(
         f"{BASE}/spt",
         headers=headers,
-        json={"return_type": "pph_unifikasi", "tax_month": 5, "tax_year": 2026},
+        json={"return_type": "pph_unifikasi", "tax_month": 6, "tax_year": 2025},
     )
-    assert spt.status_code == 201, spt.text
+    if spt.status_code == 409:
+        existing = client.get(
+            f"{BASE}/spt",
+            headers=headers,
+            params={
+                "return_type": "pph_unifikasi",
+                "tax_year": 2025,
+                "tax_month": 6,
+                "size": 100,
+            },
+        )
+        assert existing.status_code == 200, existing.text
+        spt_id = existing.json()["items"][0]["id"]
+    else:
+        assert spt.status_code == 201, spt.text
+        spt_id = spt.json()["id"]
 
-    posted = client.post(f"{BASE}/spt/{spt.json()['id']}/posting", headers=headers)
+    posted = client.post(f"{BASE}/spt/{spt_id}/posting", headers=headers)
     assert posted.status_code == 200, posted.text
     body = posted.json()
     assert body["total_income_tax"] >= 200_000
