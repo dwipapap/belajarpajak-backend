@@ -26,6 +26,7 @@ class SlipType(StrEnum):
     bp23 = "bp23"
     bp26 = "bp26"
     bppu = "bppu"
+    bpmp = "bpmp"
 
 
 class SlipStatus(StrEnum):
@@ -107,6 +108,7 @@ class TaxReturnType(StrEnum):
 
     ppn = "ppn"
     pph_unifikasi = "pph_unifikasi"
+    pph_21_26 = "pph_21_26"
 
 
 class TaxReturnKind(StrEnum):
