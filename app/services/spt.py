@@ -194,7 +194,7 @@ def _pph_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
             WithholdingSlip.tax_year == tax_return.tax_year,
             WithholdingSlip.tax_month == tax_return.tax_month,
             WithholdingSlip.status == SlipStatus.issued,
-            WithholdingSlip.slip_type.in_([SlipType.bp23, SlipType.bp26]),
+            WithholdingSlip.slip_type.in_([SlipType.bp23, SlipType.bp26, SlipType.bppu]),
         )
     ).all()
     for slip in slips:
@@ -374,7 +374,7 @@ def mark_sources_reported(session: Session, tax_return: TaxReturn) -> None:
                 WithholdingSlip.tax_year == tax_return.tax_year,
                 WithholdingSlip.tax_month == tax_return.tax_month,
                 WithholdingSlip.status == SlipStatus.issued,
-                WithholdingSlip.slip_type.in_([SlipType.bp23, SlipType.bp26]),
+                WithholdingSlip.slip_type.in_([SlipType.bp23, SlipType.bp26, SlipType.bppu]),
             )
         ).all():
             slip.spt_flag = SlipSptFlag.reported_in_spt

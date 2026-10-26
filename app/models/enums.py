@@ -25,6 +25,7 @@ class SlipType(StrEnum):
     bp21 = "bp21"
     bp23 = "bp23"
     bp26 = "bp26"
+    bppu = "bppu"
 
 
 class SlipStatus(StrEnum):
