@@ -858,3 +858,4 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
 bp21_router = make_slip_router(SlipType.bp21, "BP21")
 bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
+bppu_router = make_slip_router(SlipType.bppu, "BPPU")

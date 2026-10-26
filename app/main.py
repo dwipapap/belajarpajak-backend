@@ -62,6 +62,7 @@ def create_app() -> FastAPI:
         slips.bp21_router,
         slips.bp23_router,
         slips.bp26_router,
+        slips.bppu_router,
         tax_invoices.router,
         tax_input_invoices.router,
         tax_returns.router,
