@@ -15,11 +15,11 @@ saat ``GET /deposit`` dan eksplisit lewat ``POST /deposit/sinkron``:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
@@ -193,7 +193,9 @@ def rekap_tenant(
     ]
 
 
-def pakai_deposit(session: Session, user: User, amount: int, ref_type: str, ref_id: int) -> DepositMutation:
+def pakai_deposit(
+    session: Session, user: User, amount: int, ref_type: str, ref_id: int
+) -> DepositMutation:
     """Kurangi saldo sebesar amount; 422 bila saldo kurang (aturan lunas-sekaligus)."""
     account = get_or_create_account(session, user)
     if account.saldo < amount:

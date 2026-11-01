@@ -144,20 +144,25 @@ def update_tenant(tenant_id: int, data: TenantUpdate, session: SessionDep) -> Te
     months = payload.pop("masa_berlaku_bulan", None)
     explicit_dari = payload.pop("berlaku_dari", None)
     explicit_sampai = payload.pop("berlaku_sampai", None)
-    has_explicit = "berlaku_dari" in data.model_fields_set or "berlaku_sampai" in data.model_fields_set
+    has_explicit = (
+        "berlaku_dari" in data.model_fields_set or "berlaku_sampai" in data.model_fields_set
+    )
     # Pydantic already parsed YYYY-MM-DD into ``date``; unset fields are absent.
     if has_explicit:
         eff_dari = explicit_dari if explicit_dari is not None else tenant.berlaku_dari
         eff_sampai = explicit_sampai if explicit_sampai is not None else tenant.berlaku_sampai
+        if eff_sampai is not None and eff_sampai < date.today():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Tanggal berakhir tidak boleh sebelum hari ini — "
+                    "gunakan Nonaktifkan bila ingin memblokir"
+                ),
+            )
         if eff_dari is not None and eff_sampai is not None and eff_dari > eff_sampai:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Tanggal mulai tidak boleh setelah tanggal berakhir",
-            )
-        if eff_sampai is not None and eff_sampai < date.today():
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Tanggal berakhir tidak boleh sebelum hari ini — gunakan Nonaktifkan bila ingin memblokir",
             )
         # Explicit dates win: ignore masa_berlaku_bulan entirely.
         if explicit_dari is not None:

@@ -61,6 +61,11 @@ class TaxInvoice(TimestampMixin, table=True):
     issued_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     invalid_reason: str | None = Field(default=None, max_length=500)
     electronic_signature_status: str = Field(default="not_signed", max_length=40)
+    signer_id: int | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True),
+    )
+    signer_name: str | None = Field(default=None, max_length=150)
 
     # --- Dokumen Transaksi ---
     is_advance_payment: bool = Field(default=False)  # Uang Muka

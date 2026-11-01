@@ -49,7 +49,11 @@ def _issue_two_months(client: TestClient, headers: dict[str, str], class_id: int
             f"{BASE}/bpmp", headers=headers, json=_bpmp_payload(class_id, month=month)
         )
         assert created.status_code == 201, created.text
-        issued = client.post(f"{BASE}/bpmp/{created.json()['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+        issued = client.post(
+            f"{BASE}/bpmp/{created.json()['id']}/issue",
+            headers=headers,
+            json={"kode_otorisasi": "KO-SIM-123"},
+        )
         assert issued.status_code == 200, issued.text
 
 
@@ -65,7 +69,11 @@ def test_siswa_can_create_and_issue_bpmp_with_explicit_rate(client: TestClient) 
     assert body["income_tax"] == 175_000
     assert body["withholding_number"] is None
 
-    issued = client.post(f"{BASE}/bpmp/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"{BASE}/bpmp/{body['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200, issued.text
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
@@ -140,7 +148,11 @@ def test_pph_21_26_posting_aggregates_bpmp(client: TestClient) -> None:
 
     created = client.post(f"{BASE}/bpmp", headers=headers, json=_bpmp_payload(class_id))
     assert created.status_code == 201, created.text
-    issued = client.post(f"{BASE}/bpmp/{created.json()['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"{BASE}/bpmp/{created.json()['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200, issued.text
 
     spt = client.post(

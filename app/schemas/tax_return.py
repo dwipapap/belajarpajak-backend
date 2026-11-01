@@ -93,6 +93,9 @@ class TaxReturnRead(BaseModel):
     submitted_at: datetime | None
     submitted_by_id: int | None
 
+    bpe_number: str | None = None
+    received_at: datetime | None = None
+
     penyerahan_dpp: int
     penyerahan_dpp_nilai_lain: int
     penyerahan_ppn: int

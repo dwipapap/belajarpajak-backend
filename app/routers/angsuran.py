@@ -96,7 +96,12 @@ def _can_read(user: User, angsuran: Angsuran) -> bool:
     return angsuran.tenant_id == user.tenant_id
 
 
-@router.post("", response_model=AngsuranRead, status_code=status.HTTP_201_CREATED, dependencies=[_siswa_roles])
+@router.post(
+    "",
+    response_model=AngsuranRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_siswa_roles],
+)
 def create_angsuran(
     data: AngsuranCreate, current_user: CurrentUser, session: SessionDep
 ) -> AngsuranRead:
@@ -185,7 +190,9 @@ def get_angsuran(angsuran_id: int, current_user: CurrentUser, session: SessionDe
 
 
 @router.post("/{angsuran_id}/batal", response_model=AngsuranRead, dependencies=[_pay_roles])
-def batal_angsuran(angsuran_id: int, current_user: CurrentUser, session: SessionDep) -> AngsuranRead:
+def batal_angsuran(
+    angsuran_id: int, current_user: CurrentUser, session: SessionDep
+) -> AngsuranRead:
     angsuran = session.get(Angsuran, angsuran_id)
     if angsuran is None or not _can_read(current_user, angsuran):
         raise HTTPException(
@@ -214,7 +221,9 @@ def batal_angsuran(angsuran_id: int, current_user: CurrentUser, session: Session
 
 
 @router.post("/cicilan/{cicilan_id}/pay", response_model=CicilanRead, dependencies=[_pay_roles])
-def pay_cicilan(cicilan_id: int, data: CicilanPay, current_user: CurrentUser, session: SessionDep) -> CicilanRead:
+def pay_cicilan(
+    cicilan_id: int, data: CicilanPay, current_user: CurrentUser, session: SessionDep
+) -> CicilanRead:
     """Bayar satu cicilan. Bila semua lunas → angsuran lunas + billing paid + tagihan lunas."""
     from app.routers.tagihan import lunaskan_tagihan_untuk_billing
 

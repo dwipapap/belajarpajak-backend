@@ -55,6 +55,19 @@ def _create(client: TestClient, headers: dict, **overrides) -> dict:
     return res.json()
 
 
+#: Valid simulated Kode Otorisasi body for every /issue and /bulk-issue call.
+ISSUE_BODY = {"kode_otorisasi": "123456"}
+
+
+def _issue(client: TestClient, invoice_id: int, headers: dict, body: dict | None = None):
+    """Post to /issue with a valid Kode Otorisasi unless overridden."""
+    return client.post(
+        f"/api/v1/faktur-keluaran/{invoice_id}/issue",
+        json=body if body is not None else ISSUE_BODY,
+        headers=headers,
+    )
+
+
 def test_create_normal_code_uses_full_dpp(client: TestClient):
     headers = auth_headers(client, SISWA)
     data = _create(client, headers)
@@ -132,7 +145,7 @@ def test_issue_generates_17_digit_nsfp(client: TestClient):
     headers = auth_headers(client, SISWA)
     created = _create(client, headers, transaction_code="05")
 
-    res = client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=headers)
+    res = _issue(client, created["id"], headers)
     assert res.status_code == 200, res.text
     data = res.json()
 
@@ -147,7 +160,7 @@ def test_issue_generates_17_digit_nsfp(client: TestClient):
     assert number[6:].isdigit() and len(number[6:]) == 11
 
     # A second issue is a conflict, not a silent re-number.
-    again = client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=headers)
+    again = _issue(client, created["id"], headers)
     assert again.status_code == 409
 
 
@@ -157,12 +170,8 @@ def test_legacy_16_digit_not_generated(client: TestClient):
     first = _create(client, headers, transaction_code="01")
     second = _create(client, headers, transaction_code="01")
 
-    n1 = client.post(f"/api/v1/faktur-keluaran/{first['id']}/issue", headers=headers).json()[
-        "invoice_number"
-    ]
-    n2 = client.post(f"/api/v1/faktur-keluaran/{second['id']}/issue", headers=headers).json()[
-        "invoice_number"
-    ]
+    n1 = _issue(client, first["id"], headers).json()["invoice_number"]
+    n2 = _issue(client, second["id"], headers).json()["invoice_number"]
 
     assert len(n1) == 17 and len(n2) == 17
     assert n1[:6] == n2[:6]  # same tx+status+YY prefix
@@ -173,7 +182,7 @@ def test_issue_rejects_invoice_without_lines(client: TestClient):
     headers = auth_headers(client, SISWA)
     created = _create(client, headers, lines=[])
 
-    res = client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=headers)
+    res = _issue(client, created["id"], headers)
     assert res.status_code == 409
 
 
@@ -185,7 +194,7 @@ def test_delete_only_allowed_while_draft(client: TestClient):
     assert removed.status_code == 204
 
     issued = _create(client, headers)
-    client.post(f"/api/v1/faktur-keluaran/{issued['id']}/issue", headers=headers)
+    _issue(client, issued["id"], headers)
     denied = client.delete(f"/api/v1/faktur-keluaran/{issued['id']}", headers=headers)
     assert denied.status_code == 409
 
@@ -194,7 +203,7 @@ def test_cancel_marks_issued_invoice_invalid(client: TestClient):
     """Only admin/superadmin may cancel; the issued faktur becomes Tidak Valid."""
     siswa_headers = auth_headers(client, SISWA)
     created = _create(client, siswa_headers)
-    client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=siswa_headers)
+    _issue(client, created["id"], siswa_headers)
 
     for role_headers in (auth_headers(client, SISWA), auth_headers(client, GURU)):
         denied = client.post(
@@ -226,7 +235,7 @@ def test_cancel_role_matrix(client: TestClient):
 
     def _issued():
         created = _create(client, base_headers)
-        client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=base_headers)
+        _issue(client, created["id"], base_headers)
         return created["id"]
 
     for email in (SISWA, GURU, SUPERADMIN):
@@ -385,12 +394,8 @@ def test_issue_serials_are_unique_per_tenant_year(client: TestClient):
     first = _create(client, headers)
     second = _create(client, headers)
 
-    n1 = client.post(
-        f"/api/v1/faktur-keluaran/{first['id']}/issue", headers=headers
-    ).json()["invoice_number"]
-    n2 = client.post(
-        f"/api/v1/faktur-keluaran/{second['id']}/issue", headers=headers
-    ).json()["invoice_number"]
+    n1 = _issue(client, first["id"], headers).json()["invoice_number"]
+    n2 = _issue(client, second["id"], headers).json()["invoice_number"]
 
     assert n1 != n2
     assert len(n1) == 17 and n1.isdigit()
@@ -413,7 +418,7 @@ def test_inaccessible_mutations_return_404(client: TestClient):
     delete = client.delete(f"/api/v1/faktur-keluaran/{created['id']}", headers=intruder)
     assert delete.status_code == 404
 
-    issue = client.post(f"/api/v1/faktur-keluaran/{created['id']}/issue", headers=intruder)
+    issue = _issue(client, created["id"], intruder)
     assert issue.status_code == 404
 
     # cancel is role-gated (admin/superadmin), so a siswa intruder is refused 403.
@@ -430,14 +435,17 @@ def test_bulk_issue_partial_success(client: TestClient):
     already = _create(client, headers)
     no_lines = _create(client, headers, lines=[])
 
-    client.post(f"/api/v1/faktur-keluaran/{already['id']}/issue", headers=headers)
+    _issue(client, already["id"], headers)
 
     other_headers = auth_headers(client, OTHER_SISWA)
     other = _create(client, other_headers)
 
     res = client.post(
         "/api/v1/faktur-keluaran/bulk-issue",
-        json={"ids": [valid["id"], already["id"], other["id"], no_lines["id"], 999_999]},
+        json={
+            "ids": [valid["id"], already["id"], other["id"], no_lines["id"], 999_999],
+            "kode_otorisasi": "123456",
+        },
         headers=headers,
     )
     assert res.status_code == 200
@@ -448,6 +456,52 @@ def test_bulk_issue_partial_success(client: TestClient):
 
     state = client.get(f"/api/v1/faktur-keluaran/{valid['id']}", headers=headers).json()
     assert state["status"] == "issued"
+
+
+def test_issue_requires_kode_otorisasi(client: TestClient):
+    """Issue without a code or with a short code is 422; valid code issues + signs."""
+    headers = auth_headers(client, SISWA)
+
+    missing = _create(client, headers)
+    res = client.post(f"/api/v1/faktur-keluaran/{missing['id']}/issue", headers=headers)
+    assert res.status_code == 422
+
+    short = _create(client, headers)
+    res = client.post(
+        f"/api/v1/faktur-keluaran/{short['id']}/issue",
+        json={"kode_otorisasi": "123"},
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    created = _create(client, headers)
+    res = client.post(
+        f"/api/v1/faktur-keluaran/{created['id']}/issue",
+        json={"kode_otorisasi": "123456", "signer_name": "Penandatangan Simulasi"},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "issued"
+    assert data["signer_name"] == "Penandatangan Simulasi"
+
+
+def test_bulk_issue_without_kode_issues_nothing(client: TestClient):
+    """Bulk issue with a missing/short code rejects the whole request (422)."""
+    headers = auth_headers(client, SISWA)
+    first = _create(client, headers)
+    second = _create(client, headers)
+
+    res = client.post(
+        "/api/v1/faktur-keluaran/bulk-issue",
+        json={"ids": [first["id"], second["id"]]},
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    for invoice in (first, second):
+        state = client.get(f"/api/v1/faktur-keluaran/{invoice['id']}", headers=headers).json()
+        assert state["status"] == "draft"
 
 
 # --- P1 fixes ---------------------------------------------------------------

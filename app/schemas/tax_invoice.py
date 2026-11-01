@@ -189,6 +189,8 @@ class TaxInvoiceRead(BaseModel):
     issued_at: datetime | None
     invalid_reason: str | None
     electronic_signature_status: str
+    signer_id: int | None
+    signer_name: str | None
 
     is_advance_payment: bool
     is_settlement: bool
@@ -253,8 +255,21 @@ class TaxInvoiceCancel(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class TaxInvoiceIssue(BaseModel):
+    """Terbitkan dengan penandatangan simulasi.
+
+    ``signer_name`` defaults to the current user's name; ``kode_otorisasi``
+    is a learning proxy for Kode Otorisasi (wajib, min 6 karakter).
+    """
+
+    signer_name: str | None = Field(default=None, max_length=150)
+    kode_otorisasi: str = Field(max_length=100)
+
+
 class TaxInvoiceBulkIssue(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=200)
+    signer_name: str | None = Field(default=None, max_length=150)
+    kode_otorisasi: str = Field(max_length=100)
 
 
 class TaxInvoiceBulkIssueResult(BaseModel):

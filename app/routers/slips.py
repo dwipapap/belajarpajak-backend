@@ -55,6 +55,7 @@ from app.schemas.slip import (
 )
 from app.services import ter as ter_service
 from app.services.audit import log_action
+from app.services.signing import require_kode_otorisasi
 
 MAX_IMPORT_BYTES = 1_000_000
 MAX_IMPORT_ROWS = 500
@@ -456,20 +457,6 @@ def _resolve_income_tax(
 
 
 # --- shared access / lifecycle helpers ---------------------------------------
-
-
-def _require_kode_otorisasi(kode_otorisasi: str | None) -> None:
-    """Kode Otorisasi simulasi wajib minimal 6 karakter untuk menerbitkan slip."""
-    if kode_otorisasi is None or str(kode_otorisasi).strip() == "":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Kode Otorisasi wajib diisi minimal 6 karakter",
-        )
-    if len(str(kode_otorisasi).strip()) < 6:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Kode Otorisasi simulasi minimal 6 karakter",
-        )
 
 
 def slip_to_read(slip: WithholdingSlip) -> SlipRead:
@@ -972,7 +959,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         data: SlipBulkIssue, current_user: CurrentUser, session: SessionDep
     ) -> SlipBulkIssueResult:
         """Bulk Process → Diterbitkan Masa Pajak: issue many drafts at once."""
-        _require_kode_otorisasi(data.kode_otorisasi)
+        require_kode_otorisasi(data.kode_otorisasi)
         results: list[SlipImportRowResult] = []
         for slip_id in data.ids:
             slip = session.get(WithholdingSlip, slip_id)
@@ -1147,7 +1134,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         signer_name = (
             (data.signer_name if data and data.signer_name else None) or current_user.full_name
         )
-        _require_kode_otorisasi(data.kode_otorisasi if data else None)
+        require_kode_otorisasi(data.kode_otorisasi if data else None)
         issue_slip(slip, label, signer_id=current_user.id, signer_name=signer_name)
         session.add(slip)
         log_action(

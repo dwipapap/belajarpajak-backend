@@ -343,7 +343,7 @@ def seed_faktur_examples(
         recalculate_invoice(session, invoice)
 
         if spec["issue"]:
-            issue_invoice(session, invoice)
+            issue_invoice(session, invoice, signer_id=siswa.id, signer_name=siswa.full_name)
             session.add(invoice)
         session.flush()
 
@@ -524,7 +524,7 @@ def seed_spt_examples(
         )
         session.flush()
         recalculate_invoice(session, invoice)
-        issue_invoice(session, invoice)
+        issue_invoice(session, invoice, signer_id=siswa.id, signer_name=siswa.full_name)
         session.add(invoice)
         session.flush()
 

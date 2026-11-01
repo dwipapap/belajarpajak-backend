@@ -101,7 +101,9 @@ def test_summary_includes_berlaku_dari(client: TestClient):
     body = res.json()
     assert body["berlaku_dari"] == tenant["berlaku_dari"]
     assert body["berlaku_sampai"] == tenant["berlaku_sampai"]
-    assert body["days_remaining"] == (date.fromisoformat(body["berlaku_sampai"]) - date.today()).days
+    assert body["days_remaining"] == (
+        date.fromisoformat(body["berlaku_sampai"]) - date.today()
+    ).days
 
 
 def test_add_months_end_of_month():

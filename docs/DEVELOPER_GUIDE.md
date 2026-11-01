@@ -48,8 +48,12 @@ tiruan (meniru portal e-Bupot), guru menilai, admin mengelola institusinya.
 | `guru` | Kelas yang diajar | Lihat & nilai dokumen siswa di kelasnya |
 | `siswa` | Dirinya sendiri | Buat, ubah, terbitkan, dan lihat dokumennya sendiri |
 
-**Frontend** berada di repositori terpisah: `pajak-simulator-frontend` (Nuxt + Nuxt UI),
+**Frontend** berada di repositori terpisah: `../frontend` di workspace (GitHub `belajarpajak-frontend`, Nuxt + Nuxt UI),
 berjalan di port 3000.
+
+> Status dokumen: diperbarui sebagian 2026-11-01 (backend `8b62bc6`). Bagian 7, 8, 10, 19, Lampiran, dan A sudah memuat
+> BPMP/A1/A2, periode instansi, dan modul pembayaran lanjutan. Tabel kolom rinci di §7 dan contoh di §11–13 masih ditulis untuk
+> BP21/BP23/BP26, tetapi polanya berlaku sama untuk semua jenis slip.
 
 ---
 
@@ -115,7 +119,7 @@ backend/
 │       ├── billings.py           # /billings (list/detail/pdf/pay)
 │       ├── audit.py              # /audit-logs
 │       ├── tarif_pajak.py, dashboard.py
-│       └── services: spt.py (agregasi SPT), kjs.py (KAP-KJS), billing_pdf.py (PDF), audit.py
+│       └── services: spt.py (agregasi SPT), kjs.py (KAP-KJS), billing_pdf.py (PDF), audit.py, signing.py (cek Kode Otorisasi), slip_pdf.py, ter.py
 ├── tests/                        # conftest + 4 file uji
 ├── docker-compose.yml            # PostgreSQL 16 lokal
 ├── alembic.ini
@@ -253,9 +257,13 @@ lebih dari satu tabel.
 |---|---|---|
 | `id` | PK | |
 | `name` | varchar(150), index | |
-| `slug` | varchar(80), **unique**, index | Dipakai saat login sebagai "Kode Sekolah/Lembaga" |
-| `type` | enum `tenant_type` | `smk` \| `kampus` \| `lembaga` |
-| `is_active` | bool, default true | |
+| `slug` | varchar(80), **unique**, index | Kode instansi (immutable). Login tidak lagi memakai slug; login memakai `identifier` (email/NIK/NISN) |
+| `type` | enum `tenant_type` | `smk` \| `kampus` \| `lembaga` \| `pt` |
+| `is_active` | bool, default true | Nonaktif = semua akun instansi tidak bisa login |
+| `contact_wa` | varchar(20), nullable | WhatsApp PIC |
+| `berlaku_dari`, `berlaku_sampai` | date, nullable | Periode aktif. Login/refresh ditolak bila sudah lewat `berlaku_sampai` |
+| `max_guru`, `max_siswa`, `max_kelas` | int, nullable | Kuota; NULL = tanpa batas, pelanggaran → 409 |
+| `deactivated_reason` | varchar(255), nullable | Alasan penonaktifan (audit) |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### `users`
@@ -310,7 +318,7 @@ dipakai semua tipe.
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | PK | |
-| `slip_type` | enum `slip_type`, index | `bp21` \| `bp23` \| `bp26` |
+| `slip_type` | enum `slip_type`, index | `bp21` \| `bp23` \| `bp26` \| `bppu` \| `bpmp` \| `bpnr` \| `sp` \| `cy` |
 | `tenant_id` | FK → tenants, `CASCADE`, index | |
 | `class_id` | FK → classes, `SET NULL`, nullable, index | |
 | `siswa_id` | FK → users, `CASCADE`, index | Pemilik dokumen |
@@ -397,10 +405,15 @@ INT4). Ini isi migrasi `25c389d80451`.
 
 Semua tabel di bawah memakai `TimestampMixin` + `tenant_id` (tenant-scoped) kecuali tarif:
 
-- `tax_invoices` (`TaxInvoice`) + `tax_invoice_lines` (`TaxInvoiceLine`): Faktur Keluaran. Status `draft`/`issued`/`invalid`, kind `normal`/`pengganti`/`dibatalkan`, line type `barang`/`jasa`, buyer identity `npwp`/`nik`/`paspor`/`identitas_lain`. Uang integer, hitung server (DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12). Skor + feedback review seperti slip.
+- `tax_invoices` (`TaxInvoice`) + `tax_invoice_lines` (`TaxInvoiceLine`): Faktur Keluaran. Status `draft`/`issued`/`invalid`, kind `normal`/`pengganti`/`dibatalkan`, line type `barang`/`jasa`, buyer identity `npwp`/`nik`/`paspor`/`identitas_lain`. Uang integer, hitung server (DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12). Terbit wajib `kode_otorisasi` (cek `services/signing.py`); penandatangan di `signer_id`/`signer_name`. Skor + feedback review seperti slip.
 - `tax_input_invoices` (`TaxInputInvoice`) + `tax_input_lines`: Faktur Masukan. Status sama; `credit_status` `not_credited`/`credited` menentukan agregasi ke SPT Bagian II. Cancel admin-only.
-- `tax_returns` (`TaxReturn`) + `tax_return_lines` (`TaxReturnLine`): SPT Masa. `return_type` `ppn`/`pph_unifikasi`, `kind` `normal`/`pembetulan`, `status` `draft`/`awaiting_payment`/`reported`. Alur: create → posting (agregasi via `services/spt.py`) → pernyataan (`wajib_pajak`/`kuasa_wajib_pajak`) → submit (buat billing bila kurang bayar) → pembetulan → billing.
-- `billing_codes` (`BillingCode`): 15-digit `{KAP-KJS:6}{MM:2}{YY:2}{serial:5}`, `status` `unpaid`/`paid`, nullable `spt_id`. PDF via `services/billing_pdf.py`, KAP-KJS via `services/kjs.py`.
+- `tax_returns` (`TaxReturn`) + `tax_return_lines` (`TaxReturnLine`): SPT Masa. `return_type` `ppn`/`pph_unifikasi`, `kind` `normal`/`pembetulan`, `status` `draft`/`awaiting_payment`/`reported`. Alur: create → posting (agregasi via `services/spt.py`) → pernyataan (`wajib_pajak`/`kuasa_wajib_pajak`) → submit (buat billing bila kurang bayar; lapor via `mark_reported`: isi `status` + `received_at` + `bpe_number` `BPE-SIM-{urut:05d}/{YYYY}` per tenant per tahun) → pembetulan (kosongkan BPE) → billing. BPE PDF via `services/spt_bpe_pdf.py`; unduhan siswa via `GET /dokumen-saya`.
+- `billing_codes` (`BillingCode`): 15-digit `{KAP-KJS:6}{MM:2}{YY:2}{serial:5}`, `status` `unpaid`/`paid`, nullable `spt_id`, `tagihan_id`, `metode`, dan saat bayar `kanal` + `ntpn` + `no_bpn`. PDF via `services/billing_pdf.py`, KAP-KJS via `services/kjs.py`.
+- `billing_lines` (`BillingLine`): rincian per KAP-KJS + masa untuk billing multi-detail (mis. SPT PPh Unifikasi dengan beberapa KJS).
+- `deposit_accounts` (`DepositAccount`, saldo per user; `tenant_id` nullable untuk superadmin) + `deposit_mutations` (`DepositMutation`, jenis `topup`/`pakai`, `ref_type`/`ref_id`, idempoten). Top-up = billing mandiri KAP 411618-100 yang sudah dibayar.
+- `pbk_requests` (`PbkRequest`): pemindahbukuan `dari_kap` → `ke_kap`, `masa` MMYYYY, status `diajukan`/`disetujui`/`ditolak`, `decided_by_id`.
+- `tagihan` (`Tagihan`): SKP/STP (`jenis` `skp`/`stp`) dibuat guru/admin, status `belum`/`dibilling`/`lunas`, `billing_id`.
+- `angsuran` (`Angsuran`, status `berjalan`/`lunas`/`batal`, `n_cicilan` 2–12, `billing_id`) + `cicilan` (`Cicilan`, `ke`, `jatuh_tempo`, status `belum`/`lunas`, `kanal`).
 - `audit_logs` (`AuditLog`): jejak `submit`/`review`/`pay` via `services/audit.py` (`log_action`).
 
 Detail endpoint tiap modul: lihat Lampiran A di akhir dokumen.
@@ -416,7 +429,7 @@ disimpan sebagai enum native PostgreSQL).
 |---|---|---|
 | `TenantType` | `tenant_type` | `smk`, `kampus`, `lembaga`, `pt` |
 | `Role` | `user_role` | `superadmin`, `admin`, `guru`, `siswa` |
-| `SlipType` | `slip_type` | `bp21`, `bp23`, `bp26` |
+| `SlipType` | `slip_type` | `bp21`, `bp23`, `bp26`, `bppu`, `bpmp`, `bpnr`, `sp`, `cy` |
 | `SlipStatus` | `slip_status` | `draft`, `issued`, `invalid` |
 | `SlipTaxNature` | `slip_tax_nature` | `final`, `non_final` |
 | `SlipTaxFacility` | `slip_tax_facility` | `none`, `dtp`, `skb`, `rate_0` |
@@ -426,11 +439,15 @@ disimpan sebagai enum native PostgreSQL).
 | `TaxInvoiceLineType` | — | `barang`, `jasa` |
 | `BuyerIdentityType` | — | `npwp`, `nik`, `paspor`, `identitas_lain` |
 | `TaxInputCreditStatus` | — | `not_credited`, `credited` |
-| `TaxReturnType` | `tax_return_type` | `ppn`, `pph_unifikasi` |
+| `TaxReturnType` | `tax_return_type` | `ppn`, `pph_unifikasi`, `pph_21_26` (agregasi BPMP), `pph21_26` (SIM-TER/progresif); kedua ejaan 21/26 diperlakukan setara oleh `services/spt.py::_is_pph21_26` |
 | `TaxReturnKind` | — | `normal`, `pembetulan` |
 | `TaxReturnStatus` | — | `draft`, `awaiting_payment`, `reported` |
 | `SignerCapacity` | — | `wajib_pajak`, `kuasa_wajib_pajak` |
 | `BillingStatus` | `billing_status` | `unpaid`, `paid` |
+| `DepositMutationKind` (`models/deposit.py`) | — | `topup`, `pakai` |
+| `PbkStatus` (`models/pbk.py`) | — | `diajukan`, `disetujui`, `ditolak` |
+| `TagihanJenis` / `TagihanStatus` (`models/tagihan.py`) | — | `skp`, `stp` / `belum`, `dibilling`, `lunas` |
+| `AngsuranStatus` / `CicilanStatus` (`models/angsuran.py`) | — | `berjalan`, `lunas`, `batal` / `belum`, `lunas` |
 
 > Menambah nilai enum di PostgreSQL memerlukan migrasi Alembic eksplisit
 > (`ALTER TYPE ... ADD VALUE`) — autogenerate tidak menangkapnya.
@@ -463,8 +480,9 @@ disimpan sebagai enum native PostgreSQL).
 | faktur keluaran/masukan: baca | semua | tenantnya | kelas yang diajar | miliknya |
 | faktur: buat/ubah/hapus/terbit/credit | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
 | faktur: review (masukan cancel admin-only) | ✅ | ✅ | ✅ | ❌ |
-| spt: baca/buat/posting/pernyataan/submit/pembetulan | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
+| spt: baca/buat/posting/pernyataan/submit/pembetulan/bpe | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
 | spt: review | ✅ | ✅ | ✅ | ❌ |
+| dokumen-saya: baca | ❌ | ❌ | ❌ | ✅ (miliknya) |
 | billings: baca/pdf | semua | tenantnya | kelas yang diajar | miliknya |
 | billings: pay | ✅ | ✅ | ✅ | ✅ (miliknya) |
 | audit-logs: baca | ✅ | ✅ | ❌ | ❌ |
@@ -527,10 +545,12 @@ Email di-lowercase sebelum pencarian. User non-aktif ditolak 401.
 | Metode | Path | Body | Respons |
 |---|---|---|---|
 | GET | `` | — | `list[TenantRead]` (urut `id`) |
-| POST | `` | `TenantCreate{name, slug, type}` | 201 `TenantRead`; slug duplikat → **409** |
-| PATCH | `/{tenant_id}` | `TenantUpdate{name?, type?, is_active?}` | `TenantRead`; tidak ada → **404** |
-
-> Tidak ada endpoint DELETE tenant.
+| POST | `` | `TenantCreate{name, slug, type, contact_wa?, masa_berlaku_bulan=12, max_guru?, max_siswa?, max_kelas?, admin{email, full_name, password?}}` | 201 `TenantRead`; sekaligus membuat **admin pertama** dalam satu transaksi; slug/email duplikat → **409** |
+| PATCH | `/{tenant_id}` | `TenantUpdate{name?, type?, contact_wa?, masa_berlaku_bulan?, berlaku_dari?, berlaku_sampai?, max_*?}` | `masa_berlaku_bulan` memperpanjang dari `max(berlaku_sampai, hari ini)`; tanggal eksplisit menang atas durasi |
+| POST | `/{tenant_id}/deactivate` · `/{tenant_id}/activate` | `{reason}` | Kunci/buka login seluruh instansi (alasan dicatat di audit) |
+| GET | `/{tenant_id}/summary` | — | Dossier: kuota terpakai, hitung mundur periode, admin, riwayat |
+| GET | `/{tenant_id}/export` | — | Backup JSON |
+| DELETE | `/{tenant_id}` | `confirm_code` = slug | Hapus permanen (204) |
 
 ### Users — `/api/v1/users` (superadmin + admin)
 
@@ -1152,7 +1172,7 @@ Tambahkan tahun ke `TARIF_YEARS` di `app/seed.py`, atau isi lewat endpoint
 2. **Penyimpanan token di frontend**: access token di memori, refresh token di
    `localStorage`. Diterima untuk dev; pertimbangkan cookie httpOnly sebelum produksi.
 3. **Tidak ada rate limiting** pada `/auth/login` — brute force tidak dibatasi.
-4. **Tidak ada endpoint DELETE** untuk tenant maupun user (hanya `is_active=false`).
+4. **Tidak ada endpoint DELETE user** (hanya `is_active=false`). Tenant sudah bisa dihapus permanen (`DELETE /tenants/{id}` + `confirm_code`).
 5. **Import XML memakai `xml.etree.ElementTree`** yang rentan terhadap serangan entity
    expansion (billion laughs). Batas 1 MB mengurangi risiko tapi tidak menghilangkannya —
    pertimbangkan `defusedxml` bila import dibuka untuk masukan tidak tepercaya.
@@ -1173,13 +1193,13 @@ Tambahkan tahun ke `TARIF_YEARS` di `app/seed.py`, atau isi lewat endpoint
 
 ### Peta jalan yang direncanakan
 
-**Sudah done:** e-Bupot BP21/BP23/BP26, e-Faktur Keluaran/Masukan, SPT Masa PPN + PPh Unifikasi,
-kode billing + pay + PDF, audit trail, penilaian per-dokumen.
+**Sudah done:** e-Bupot BP21/BP23/BP26/BPPU/BPMP/BPNR/SP/CY + A1/A2, TER penuh, e-Faktur Keluaran/Masukan,
+SPT Masa PPN + PPh Unifikasi + PPh 21/26, kode billing (NTPN/kanal/multi-detail) + pay + PDF, billing mandiri,
+deposit, pemindahbukuan, tagihan, angsuran, periode instansi + dossier, audit trail, penilaian per-dokumen.
 
-**Berikutnya:** BPPU/BPNR & varian Unifikasi (PPh 15/22/4(2), setor-sendiri, digunggung), TER PPh 21,
-retur / dokumen lain / prepopulated, SPT Tahunan OP/Badan, billing mandiri + Buku Besar,
-Profil WP/NPWP-NITKU, LMS (gradebook agregat, bank soal, ujian, rapor, notifikasi, QR).
-Lihat `reports/Analisis Gap PajakSim vs Coretax.md` untuk analisis gap penuh.
+**Berikutnya:** lihat `../plans/README.md` (plan 007–011: TTE Upload Faktur, Pajak Masukan prepopulated,
+SPT Induk + Lampiran, BPE SPT + Dokumen Saya, SPT Tahunan OP) dan `../docs/AUDIT_FIDELITAS_ALUR.md`.
+Ditunda: Ganti Peran / Profil WP. Kemudian: retur / dokumen lain, SPT Tahunan Badan, Buku Besar, lapisan LMS.
 
 ---
 
@@ -1196,16 +1216,22 @@ POST   /api/v1/auth/change-password
 GET    /api/v1/tenants
 POST   /api/v1/tenants
 PATCH  /api/v1/tenants/{tenant_id}
+POST   /api/v1/tenants/{tenant_id}/deactivate
+POST   /api/v1/tenants/{tenant_id}/activate
+GET    /api/v1/tenants/{tenant_id}/summary
+GET    /api/v1/tenants/{tenant_id}/export
+DELETE /api/v1/tenants/{tenant_id}
 
 GET    /api/v1/users
 POST   /api/v1/users
+POST   /api/v1/users/bulk
 PATCH  /api/v1/users/{user_id}
 
 GET    /api/v1/classes
 POST   /api/v1/classes
 GET    /api/v1/classes/{class_id}
 POST   /api/v1/classes/{class_id}/enrollments
-DELETE /api/v1/classes/{class_id}/enrollments (lihat routers/classes.py)
+DELETE /api/v1/classes/{class_id}/enrollments/{siswa_id}
 PATCH  /api/v1/classes/{class_id}/archive
 
 GET    /api/v1/dashboard/summary
@@ -1219,7 +1245,7 @@ POST   /api/v1/tarif-pajak/progresif
 PATCH  /api/v1/tarif-pajak/progresif/{bracket_id}
 DELETE /api/v1/tarif-pajak/progresif/{bracket_id}
 
-# {t} ∈ {bp21, bp23, bp26}
+# {t} ∈ {bp21, bp23, bp26, bppu, bpmp, bpnr, sp, cy}
 GET    /api/v1/{t}
 GET    /api/v1/{t}/summary
 GET    /api/v1/{t}/import-template
@@ -1236,6 +1262,13 @@ POST   /api/v1/{t}/{slip_id}/cancel
 POST   /api/v1/{t}/{slip_id}/invalidate
 PATCH  /api/v1/{t}/{slip_id}/spt-flag
 PATCH  /api/v1/{t}/{slip_id}/review
+GET    /api/v1/{t}/{slip_id}/pdf
+
+# {f} ∈ {a1, a2}
+GET    /api/v1/{f}
+GET    /api/v1/{f}/{identity}
+
+# faktur, SPT, billing, pembayaran lanjutan, audit: lihat Lampiran A
 ```
 
 ---
@@ -1246,10 +1279,14 @@ Ringkasan pola (otorisasi + tenancy mengikuti §9; uang integer + basis points m
 
 **Faktur Keluaran** (`app/routers/tax_invoices.py`, prefix `/faktur-keluaran`):
 `GET /`, `GET /summary`, `GET /export-csv`, `POST /` (draft + hitung server),
-`POST /bulk-issue`, `GET|PATCH|DELETE /{invoice_id}` (ubah/hapus hanya draft),
-`POST /{invoice_id}/issue`, `POST /{invoice_id}/cancel`, `PATCH /{invoice_id}/review`,
+`POST /bulk-issue` (body `{ids, signer_name?, kode_otorisasi}` wajib),
+`GET|PATCH|DELETE /{invoice_id}` (ubah/hapus hanya draft),
+`POST /{invoice_id}/issue` (body `{signer_name?, kode_otorisasi}` wajib, via modal Tanda Tangan Dokumen),
+`POST /{invoice_id}/cancel`, `PATCH /{invoice_id}/review`,
 line CRUD `POST /{invoice_id}/lines`, `PATCH|DELETE /{invoice_id}/lines/{line_id}`.
 Lifecycle `draft → issued` / `invalid`; kind `normal`/`pengganti`/`dibatalkan`.
+Kode Otorisasi diperiksa oleh `app/services/signing.py::require_kode_otorisasi`
+(berbagi dengan semua jenis slip); penandatangan tersimpan di `signer_id`/`signer_name`.
 
 **Faktur Masukan** (`app/routers/tax_input_invoices.py`, prefix `/faktur-masukan`):
 `GET /`, `GET /summary`, `GET /export-csv`, `POST /`,
@@ -1259,18 +1296,29 @@ Lifecycle `draft → issued` / `invalid`; kind `normal`/`pengganti`/`dibatalkan`
 `PATCH /{invoice_id}/review`, line CRUD sama. `credit_status` menggerakkan agregasi SPT.
 
 **SPT Masa** (`app/routers/tax_returns.py`, prefix `/spt`, service `app/services/spt.py`):
-`GET /`, `GET /summary`, `POST /` (konsep draft, `return_type` `ppn`/`pph_unifikasi`),
+`GET /`, `GET /summary`, `POST /` (konsep draft, `return_type` `ppn`/`pph_unifikasi`/`pph_21_26`/`pph21_26`),
 `GET /{return_id}`, `POST /{return_id}/posting` (agregasi idempoten),
 `POST /{return_id}/pernyataan` (signer `wajib_pajak`/`kuasa_wajib_pajak`),
-`POST /{return_id}/submit` (buat billing bila kurang bayar),
+`POST /{return_id}/submit?metode=billing|deposit` (body `{passphrase}`; kurang bayar → billing + `awaiting_payment`, atau dipotong dari deposit → langsung `reported`),
 `POST /{return_id}/pembetulan`, `DELETE /{return_id}` (draft saja),
-`GET /{return_id}/billing`, `PATCH /{return_id}/review`.
-Status `draft`/`awaiting_payment`/`reported`.
+`GET /{return_id}/billing`, `GET /{return_id}/bpe` (PDF BPE, reported saja),
+`PATCH /{return_id}/review`.
+Status `draft`/`awaiting_payment`/`reported`. Lapor selalu lewat
+`services/spt.py::mark_reported` (satu-satunya penulis `bpe_number`/`received_at`).
+**Dokumen Saya** (`app/routers/dokumen_saya.py`, prefix `/dokumen-saya`, siswa saja):
+`GET /?jenis=bpe_spt|bukti_potong|kode_billing&tahun=` → `{items: DokumenSayaRow[], total}`.
 
 **Billing & PDF** (`app/routers/billings.py`, service `billing_pdf.py`, `kjs.py`):
 `GET /billings`, `GET /billings/{billing_id}`,
-`GET /billings/{billing_id}/pdf`, `POST /billings/{billing_id}/pay`.
-`BillingCode` 15-digit, `unpaid` → `paid` (SPT terkait menjadi `reported`).
+`GET /billings/{billing_id}/pdf`, `POST /billings/{billing_id}/pay` (kanal → NTPN + No BPN),
+`POST /billings` (billing mandiri, whitelist `MANDIRI_KJS`).
+`BillingCode` 15-digit + `BillingLine` per KJS, `unpaid` → `paid` (SPT terkait menjadi `reported`).
+
+**Pembayaran lanjutan** (`app/routers/deposit.py`, `pbk.py`, `tagihan.py`, `angsuran.py`):
+- `/deposit`: `GET /` (saldo + mutasi milik sendiri, sinkron top-up dulu), `POST /sinkron`, `GET /tenant` (rekap guru/admin).
+- `/pbk`: `POST /`, `GET /`, `POST /{pbk_id}/setujui`, `POST /{pbk_id}/tolak` (guru/admin/superadmin).
+- `/tagihan`: `POST /` (guru/admin), `GET /`, `GET /{tagihan_id}`, `POST /{tagihan_id}/buat-billing`, `POST /{tagihan_id}/lunaskan-dari-billing`.
+- `/angsuran`: `POST /` (siswa), `GET /`, `GET /{angsuran_id}`, `POST /{angsuran_id}/batal`, `POST /cicilan/{cicilan_id}/pay`.
 
 **Audit** (`app/routers/audit.py`, service `audit.py`):
 `GET /audit-logs` (admin/superadmin). Ditulis pada submit/review/pay.

@@ -282,9 +282,7 @@ def pay_billing(
         if tax_return is not None and tax_return.status == TaxReturnStatus.awaiting_payment:
             from app.services import spt as spt_service
 
-            spt_service.mark_sources_reported(session, tax_return)
-            tax_return.status = TaxReturnStatus.reported
-            tax_return.submitted_at = datetime.now(tz=UTC)
+            spt_service.mark_reported(session, tax_return, now=datetime.now(tz=UTC))
             tax_return.submitted_by_id = current_user.id
             session.add(tax_return)
 

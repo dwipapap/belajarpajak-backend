@@ -42,7 +42,8 @@ def _enrolled_students(session: SessionDep, class_id: int) -> list[User]:
 
 @router.get("", response_model=list[ClassRead], dependencies=[_read_roles])
 def list_classes(current_user: CurrentUser, session: SessionDep) -> list[ClassRead]:
-    """Admin: all classes in tenant. Guru: own classes. Siswa: enrolled classes. Superadmin: all classes cross-tenant (read-only)."""
+    """Admin: all classes in tenant. Guru: own classes. Siswa: enrolled classes.
+    Superadmin: all classes cross-tenant (read-only)."""
     query = select(SchoolClass)
     if current_user.role != Role.superadmin:
         query = query.where(SchoolClass.tenant_id == current_user.tenant_id)

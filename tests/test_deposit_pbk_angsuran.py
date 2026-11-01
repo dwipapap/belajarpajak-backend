@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.db import engine
 from app.main import app
@@ -46,7 +46,7 @@ _NEW_TABLES = (
 def _clean_new_tables():
     with Session(engine) as session:
         for table in _NEW_TABLES:
-            session.execute(text(f"TRUNCATE TABLE {table} RESTART CASCADE"))
+            session.execute(text(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE"))
         session.commit()
 
 
@@ -55,17 +55,42 @@ def _me_id(client: TestClient, headers: dict) -> int:
 
 
 def _insert_paid_deposit_billing(client_headers_amount: tuple, amount: int = 1_000_000):
-    """Sisipkan billing mandiri deposit 411618-100 yang paid (KAP di luar whitelist)."""
+    """Sisipkan billing mandiri deposit 411618-100 yang paid (KAP di luar whitelist).
+
+    Serial memakai nilai kecil tak-jenuh (max+1, mengabaikan artefak 99999
+    dari helper lama) agar allocator serial tidak jenuh untuk tenant itu.
+    """
+    from sqlmodel import select
+
     from app.models.billing import BillingCode
     from app.models.enums import BillingStatus
 
     headers, siswa_id, tenant_id = client_headers_amount
     with Session(engine) as session:
+        # Bersihkan artefak helper lama yang menjenuhkan allocator (akhiran 99999).
+        stale = session.exec(
+            select(BillingCode).where(
+                BillingCode.tenant_id == tenant_id,
+                BillingCode.code.like("%99999"),
+            )
+        ).all()
+        for row in stale:
+            session.delete(row)
+        session.flush()
+        used = session.exec(
+            select(BillingCode.code).where(BillingCode.tenant_id == tenant_id)
+        ).all()
+        serials = [
+            int(c[-5:])
+            for c in used
+            if len(c) == 15 and c[-5:].isdigit() and int(c[-5:]) < 99_999
+        ]
+        serial = max(serials, default=0) + 1
         billing = BillingCode(
             tenant_id=tenant_id,
             siswa_id=siswa_id,
             spt_id=None,
-            code=f"411618{(datetime.now(tz=UTC).strftime('%m%y'))}99999",
+            code=f"411618{(datetime.now(tz=UTC).strftime('%m%y'))}{serial:05d}",
             status=BillingStatus.paid,
             amount=amount,
             kap_kjs="411618-100",
@@ -285,54 +310,113 @@ def test_angsuran_guru_tenant_scope(client: TestClient) -> None:
 # --- B2 submit via deposit ------------------------------------------------------
 
 
+def _make_bp23_issued_unifikasi(
+    client: TestClient, headers: dict, month: int, year: int, gross: int
+) -> dict:
+    """Bukti potong PPh 23 terbit untuk periode SPT unifikasi (dpp 100%, tarif 15%)."""
+    res = client.post(
+        f"{BASE}/bp23",
+        json={
+            "tax_month": month,
+            "tax_year": year,
+            "recipient_identity_number": "1234567890123456",
+            "recipient_name": "Pemotongan Simulasi",
+            "tax_object_code": "24-100-01",
+            "gross_income": gross,
+            "dpp_percent": 100,
+            "rate_percent": 15,
+        },
+        headers=headers,
+    )
+    assert res.status_code == 201, res.text
+    created = res.json()
+    issued = client.post(
+        f"{BASE}/bp23/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
+    assert issued.status_code == 200, issued.text
+    return issued.json()
+
+
 def test_spt_submit_deposit_saldo_kurang_dan_cukup(client: TestClient) -> None:
     from app.models.enums import TaxReturnType
+    from app.models.slip import WithholdingSlip
     from app.models.tax_return import TaxReturn
 
     headers = auth_headers(client, SISWA)
     me = client.get(f"{BASE}/auth/me", headers=headers).json()
+    tenant_id, siswa_id = me["tenant_id"], me["id"]
+
+    # DB tes dipakai bersama antar run: bersihkan sisa SPT/slip periode ini
+    # agar posting hanya mengagregat dokumen skenario ini (deterministik).
     with Session(engine) as session:
-        spt = TaxReturn(
-            tenant_id=me["tenant_id"],
-            siswa_id=me["id"],
-            created_by_id=me["id"],
-            return_type=TaxReturnType.pph_unifikasi,
-            tax_month=11,
-            tax_year=2025,
-            signer_name="Siswa Satu",
-            amount_due=300_000,
-        )
-        session.add(spt)
+        for spt in session.exec(
+            select(TaxReturn).where(
+                TaxReturn.tenant_id == tenant_id,
+                TaxReturn.siswa_id == siswa_id,
+                TaxReturn.return_type == TaxReturnType.pph_unifikasi,
+                TaxReturn.tax_year == 2025,
+                TaxReturn.tax_month.in_([10, 11]),
+            )
+        ).all():
+            session.delete(spt)
+        for slip in session.exec(
+            select(WithholdingSlip).where(
+                WithholdingSlip.tenant_id == tenant_id,
+                WithholdingSlip.siswa_id == siswa_id,
+                WithholdingSlip.tax_year == 2025,
+                WithholdingSlip.tax_month.in_([10, 11]),
+            )
+        ).all():
+            session.delete(slip)
         session.commit()
-        session.refresh(spt)
-        spt_id = spt.id
-    # Saldo (500rb dari test sinkron) >= 300rb? Pastikan deterministik: kuras dulu
-    # dengan SPT lain bila perlu — cukup uji 422 dengan nominal raksasa.
-    with Session(engine) as session:
-        big = TaxReturn(
-            tenant_id=me["tenant_id"],
-            siswa_id=me["id"],
-            created_by_id=me["id"],
-            return_type=TaxReturnType.pph_unifikasi,
-            tax_month=10,
-            tax_year=2025,
-            signer_name="Siswa Satu",
-            amount_due=999_999_999,
-        )
-        session.add(big)
-        session.commit()
-        session.refresh(big)
-        big_id = big.id
+
+    # Submit me-recompute via posting, jadi SPT butuh dokumen riil agar
+    # amount_due-nya survive (tanpa dokumen = nihil = langsung reported).
+    saldo = client.get(f"{BASE}/deposit", headers=headers).json()["saldo"]
+    total_pajak = 0
+    gross = (saldo + 2_000_000) * 10
+    for _ in range(3):
+        total_pajak += _make_bp23_issued_unifikasi(client, headers, 10, 2025, gross)[
+            "income_tax"
+        ]
+        if total_pajak > saldo:
+            break
+    assert total_pajak > saldo
+
+    created = client.post(
+        f"{BASE}/spt",
+        json={"return_type": "pph_unifikasi", "tax_month": 10, "tax_year": 2025},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    spt_id = created.json()["id"]
+    pernyataan = client.post(
+        f"{BASE}/spt/{spt_id}/pernyataan",
+        json={
+            "signer_name": "Siswa Satu",
+            "signer_npwp": "0024400141421000",
+            "signer_capacity": "wajib_pajak",
+        },
+        headers=headers,
+    )
+    assert pernyataan.status_code == 200, pernyataan.text
+
+    # Saldo kurang → 422 lunas-sekaligus.
     poor = client.post(
-        f"{BASE}/spt/{big_id}/submit?metode=deposit",
+        f"{BASE}/spt/{spt_id}/submit?metode=deposit",
         json={"passphrase": PASSPHRASE},
         headers=headers,
     )
     assert poor.status_code == 422, poor.text
     assert "deposit" in poor.text.lower() or "saldo" in poor.text.lower()
-    with Session(engine) as session:
-        session.delete(session.get(TaxReturn, big_id))
-        session.commit()
+
+    # Top-up secukupnya lalu submit ulang SPT yang sama → reported via deposit.
+    kurang = total_pajak - client.get(f"{BASE}/deposit", headers=headers).json()["saldo"]
+    _insert_paid_deposit_billing((headers, siswa_id, tenant_id), amount=kurang + 100_000)
+    sink = client.post(f"{BASE}/deposit/sinkron", headers=headers)
+    assert sink.status_code == 200, sink.text
     ok = client.post(
         f"{BASE}/spt/{spt_id}/submit?metode=deposit",
         json={"passphrase": PASSPHRASE},
@@ -343,7 +427,6 @@ def test_spt_submit_deposit_saldo_kurang_dan_cukup(client: TestClient) -> None:
     with Session(engine) as session:
         row = session.get(TaxReturn, spt_id)
         assert row.payment_ref is not None and row.payment_ref.startswith("DEPOSIT:")
-        remaining = session.exec(text("SELECT 1")).all()  # no-op, keep session warm
     # Tidak ada billing yang diterbitkan untuk SPT deposit.
     assert (
         client.get(f"{BASE}/spt/{spt_id}/billing", headers=headers).status_code == 404

@@ -68,7 +68,11 @@ def _make_keluaran_issued(
     )
     assert res.status_code == 201, res.text
     created = res.json()
-    issued = client.post(f"{BASE}/faktur-keluaran/{created['id']}/issue", headers=headers)
+    issued = client.post(
+        f"{BASE}/faktur-keluaran/{created['id']}/issue",
+        json={"kode_otorisasi": "123456"},
+        headers=headers,
+    )
     assert issued.status_code == 200, issued.text
     return issued.json()
 
@@ -116,7 +120,11 @@ def _make_bp23_issued(
     )
     assert res.status_code == 201, res.text
     created = res.json()
-    issued = client.post(f"{BASE}/bp23/{created['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"{BASE}/bp23/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200, issued.text
     return issued.json()
 
