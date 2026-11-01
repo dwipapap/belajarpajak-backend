@@ -20,7 +20,7 @@ The frontend lives in a **separate repository**: `../frontend` in the workspace 
 - Platform foundation: JWT auth (one `identifier`: email or siswa NIK/NISN), refresh tokens, RBAC, tenant isolation, users (single + bulk), classes (enroll, remove, archive; superadmin reads across tenants), role-shaped dashboard summaries.
 - Institutions (tenants): created by the superadmin together with the first admin; active period `berlaku_dari`/`berlaku_sampai` (explicit dates or extend by N months), quotas, dossier summary, deactivate/activate, JSON export, delete with confirmation. Login and refresh are blocked once the period expires.
 - Simulated e-Bupot: BP21, BP23, BP26, BPPU, BPMP, BPNR, SP, CY withholding slips backed by one `withholding_slips` table with `slip_type` as discriminator (`slips.py` factory `make_slip_router`). Numbers prefixed `SIM-`; BP21 supports SIM-TER (A/B/C Jan–Nov) vs progresif Desember with `calculation_method`; issue requires signer + Kode Otorisasi simulasi (min 6 chars, every slip type) and offers BPE-SIM PDF; siswa may cancel their own issued slips. TER table is the full official table (peak 34%). BP A1/A2 (`/a1`, `/a2`) are read-only yearly aggregates of issued BPMP.
-- Simulated e-Faktur: Faktur Keluaran (`/faktur-keluaran`) and Faktur Masukan (`/faktur-masukan`) with lines, issue/cancel, credit/uncredit, review/score.
+- Simulated e-Faktur: Faktur Keluaran (`/faktur-keluaran`) and Faktur Masukan (`/faktur-masukan`) with lines, issue/cancel, credit/uncredit, review/score. Keluaran issue requires signer + Kode Otorisasi simulasi (min 6 chars, like every slip type).
 - Simulated SPT Masa: PPN + PPh Unifikasi + PPh 21/26 (`/spt`, types `ppn` / `pph_unifikasi` / `pph_21_26` (BPMP aggregate) / `pph21_26` (SIM-TER/progresif)) with posting, pernyataan, submit (pay via billing or deposit), pembetulan, billing linkage, review.
 - Billing & payment: server-side `BillingCode` (`/billings`) with multi-detail `BillingLine` per KJS, pay flow recording kanal + NTPN + No BPN, PDF generation (`billing_pdf.py`), KAP-KJS helper (`kjs.py`, PPN Masa = 411211-100, PPh 23 per object).
 - Payment services: Deposit Pajak (`/deposit`, wallet + idempotent mutations, top-up = billing mandiri 411618-100), Pemindahbukuan (`/pbk`, guru/admin approve or reject), Tagihan SKP/STP (`/tagihan`, issued by guru/admin, settled through a billing), Angsuran (`/angsuran`, 2–12 cicilan).
@@ -194,7 +194,7 @@ Access follows the existing tenancy/RBAC pattern:
 
 ## Simulated e-Faktur modules
 
-- **Faktur Keluaran** (`/api/v1/faktur-keluaran`): list, summary, export-csv, create (draft + server-side DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12), bulk-issue, get/patch/delete draft, issue, cancel, review, plus line CRUD (`/{id}/lines`, `/{id}/lines/{line_id}`).
+- **Faktur Keluaran** (`/api/v1/faktur-keluaran`): list, summary, export-csv, create (draft + server-side DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12), bulk-issue (body `{ids, signer_name?, kode_otorisasi}`), get/patch/delete draft, issue (body `{signer_name?, kode_otorisasi}` wajib), cancel, review, plus line CRUD (`/{id}/lines`, `/{id}/lines/{line_id}`).
 - **Faktur Masukan** (`/api/v1/faktur-masukan`): list, summary, export-csv, create, bulk-credit/uncredit/delete, get/patch/delete, credit/uncredit, cancel (admin-only), review, plus line CRUD. `credit_status` (`not_credited` / `credited`) drives SPT aggregation.
 
 ## Simulated SPT Masa module

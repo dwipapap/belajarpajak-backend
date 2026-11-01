@@ -119,7 +119,7 @@ backend/
 │       ├── billings.py           # /billings (list/detail/pdf/pay)
 │       ├── audit.py              # /audit-logs
 │       ├── tarif_pajak.py, dashboard.py
-│       └── services: spt.py (agregasi SPT), kjs.py (KAP-KJS), billing_pdf.py (PDF), audit.py
+│       └── services: spt.py (agregasi SPT), kjs.py (KAP-KJS), billing_pdf.py (PDF), audit.py, signing.py (cek Kode Otorisasi), slip_pdf.py, ter.py
 ├── tests/                        # conftest + 4 file uji
 ├── docker-compose.yml            # PostgreSQL 16 lokal
 ├── alembic.ini
@@ -405,7 +405,7 @@ INT4). Ini isi migrasi `25c389d80451`.
 
 Semua tabel di bawah memakai `TimestampMixin` + `tenant_id` (tenant-scoped) kecuali tarif:
 
-- `tax_invoices` (`TaxInvoice`) + `tax_invoice_lines` (`TaxInvoiceLine`): Faktur Keluaran. Status `draft`/`issued`/`invalid`, kind `normal`/`pengganti`/`dibatalkan`, line type `barang`/`jasa`, buyer identity `npwp`/`nik`/`paspor`/`identitas_lain`. Uang integer, hitung server (DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12). Skor + feedback review seperti slip.
+- `tax_invoices` (`TaxInvoice`) + `tax_invoice_lines` (`TaxInvoiceLine`): Faktur Keluaran. Status `draft`/`issued`/`invalid`, kind `normal`/`pengganti`/`dibatalkan`, line type `barang`/`jasa`, buyer identity `npwp`/`nik`/`paspor`/`identitas_lain`. Uang integer, hitung server (DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12). Terbit wajib `kode_otorisasi` (cek `services/signing.py`); penandatangan di `signer_id`/`signer_name`. Skor + feedback review seperti slip.
 - `tax_input_invoices` (`TaxInputInvoice`) + `tax_input_lines`: Faktur Masukan. Status sama; `credit_status` `not_credited`/`credited` menentukan agregasi ke SPT Bagian II. Cancel admin-only.
 - `tax_returns` (`TaxReturn`) + `tax_return_lines` (`TaxReturnLine`): SPT Masa. `return_type` `ppn`/`pph_unifikasi`, `kind` `normal`/`pembetulan`, `status` `draft`/`awaiting_payment`/`reported`. Alur: create → posting (agregasi via `services/spt.py`) → pernyataan (`wajib_pajak`/`kuasa_wajib_pajak`) → submit (buat billing bila kurang bayar) → pembetulan → billing.
 - `billing_codes` (`BillingCode`): 15-digit `{KAP-KJS:6}{MM:2}{YY:2}{serial:5}`, `status` `unpaid`/`paid`, nullable `spt_id`, `tagihan_id`, `metode`, dan saat bayar `kanal` + `ntpn` + `no_bpn`. PDF via `services/billing_pdf.py`, KAP-KJS via `services/kjs.py`.
@@ -1278,10 +1278,14 @@ Ringkasan pola (otorisasi + tenancy mengikuti §9; uang integer + basis points m
 
 **Faktur Keluaran** (`app/routers/tax_invoices.py`, prefix `/faktur-keluaran`):
 `GET /`, `GET /summary`, `GET /export-csv`, `POST /` (draft + hitung server),
-`POST /bulk-issue`, `GET|PATCH|DELETE /{invoice_id}` (ubah/hapus hanya draft),
-`POST /{invoice_id}/issue`, `POST /{invoice_id}/cancel`, `PATCH /{invoice_id}/review`,
+`POST /bulk-issue` (body `{ids, signer_name?, kode_otorisasi}` wajib),
+`GET|PATCH|DELETE /{invoice_id}` (ubah/hapus hanya draft),
+`POST /{invoice_id}/issue` (body `{signer_name?, kode_otorisasi}` wajib, via modal Tanda Tangan Dokumen),
+`POST /{invoice_id}/cancel`, `PATCH /{invoice_id}/review`,
 line CRUD `POST /{invoice_id}/lines`, `PATCH|DELETE /{invoice_id}/lines/{line_id}`.
 Lifecycle `draft → issued` / `invalid`; kind `normal`/`pengganti`/`dibatalkan`.
+Kode Otorisasi diperiksa oleh `app/services/signing.py::require_kode_otorisasi`
+(berbagi dengan semua jenis slip); penandatangan tersimpan di `signer_id`/`signer_name`.
 
 **Faktur Masukan** (`app/routers/tax_input_invoices.py`, prefix `/faktur-masukan`):
 `GET /`, `GET /summary`, `GET /export-csv`, `POST /`,
