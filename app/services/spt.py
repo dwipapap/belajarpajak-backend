@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session, or_, select
 
 from app.models.billing import BillingCode, BillingLine
 from app.models.enums import (
     BillingStatus,
+    LbTreatment,
     SlipSptFlag,
     SlipStatus,
     SlipType,
@@ -28,8 +29,107 @@ from app.models.slip import WithholdingSlip
 from app.models.tax_input_invoice import TaxInputInvoice
 from app.models.tax_invoice import TaxInvoice
 from app.models.tax_return import TaxReturn, TaxReturnLine
+from app.schemas.tax_return import SptLampiranRow
 from app.services import kjs
 
+#: Faktur Pajak codes that belong to the A-1 export table (subset of A-2).
+EXPORT_CODES = frozenset({"09", "10"})
+
+#: Lampiran codes served per SPT type: PPN tabs vs PPh tabs.
+PPN_LAMPIRAN_CODES = ("a1", "a2", "b1", "b2", "b3", "c")
+PPH_LAMPIRAN_CODES = ("daftar1", "daftar2", "lampiran1")
+
+
+def lampiran_rows(
+    session: Session, tax_return: TaxReturn, kode: str
+) -> list[SptLampiranRow]:
+    """Detail rows behind one SPT lampiran tab, from the posting source sets.
+
+    Every document-returning tab reuses the ``select_*`` selectors that feed
+    :func:`posting`, so lampiran totals always match the Induk aggregates.
+    Empty tabs (``b1``/``b3``/``c``/``daftar2``) have no source module yet.
+    """
+    normalized = kode.lower()
+    if tax_return.return_type == TaxReturnType.ppn:
+        if normalized not in PPN_LAMPIRAN_CODES:
+            raise ValueError(f"Lampiran {kode} tidak berlaku untuk SPT Masa PPN")
+        if normalized == "a1":
+            invoices = [
+                inv
+                for inv in select_ppn_keluaran(session, tax_return)
+                if inv.transaction_code in EXPORT_CODES
+            ]
+            return [
+                SptLampiranRow(
+                    nama=inv.buyer_name,
+                    identitas=inv.buyer_identity_number,
+                    nomor_dokumen=inv.invoice_number,
+                    tanggal_dokumen=inv.invoice_date,
+                    dpp=inv.total_dpp,
+                    ppn=inv.total_ppn,
+                    ppnbm=inv.total_ppnbm,
+                    source_type="tax_invoice",
+                    source_id=inv.id,
+                )
+                for inv in invoices
+            ]
+        if normalized == "a2":
+            return [
+                SptLampiranRow(
+                    nama=inv.buyer_name,
+                    identitas=inv.buyer_identity_number,
+                    nomor_dokumen=inv.invoice_number,
+                    tanggal_dokumen=inv.invoice_date,
+                    dpp=inv.total_dpp,
+                    ppn=inv.total_ppn,
+                    ppnbm=inv.total_ppnbm,
+                    source_type="tax_invoice",
+                    source_id=inv.id,
+                )
+                for inv in select_ppn_keluaran(session, tax_return)
+            ]
+        if normalized == "b2":
+            return [
+                SptLampiranRow(
+                    nama=inv.seller_name or "-",
+                    identitas=inv.seller_npwp,
+                    nomor_dokumen=inv.invoice_number,
+                    tanggal_dokumen=inv.invoice_date,
+                    dpp=inv.total_dpp,
+                    ppn=inv.total_ppn,
+                    ppnbm=inv.total_ppnbm,
+                    source_type="tax_input_invoice",
+                    source_id=inv.id,
+                )
+                for inv in select_ppn_masukan(session, tax_return)
+            ]
+        # b1 (impor/PIB), b3 (masukan tak dapat dikreditkan — menunggu plan
+        # 008), c (retur): belum ada modul sumber.
+        return []
+    if normalized not in PPH_LAMPIRAN_CODES:
+        raise ValueError(f"Lampiran {kode} tidak berlaku untuk SPT Masa PPh")
+    if normalized == "daftar1":
+        return [_slip_row(session, slip) for slip in select_sp_slips(session, tax_return)]
+    if normalized == "lampiran1":
+        return [_slip_row(session, slip) for slip in select_pph_slips(session, tax_return)]
+    # daftar2 (dokumen yang dipersamakan): menu masih Segera hadir.
+    return []
+
+
+def _slip_row(session: Session, slip: WithholdingSlip) -> SptLampiranRow:
+    tanggal = slip.document_date
+    if tanggal is None and slip.issued_at is not None:
+        tanggal = slip.issued_at.date()
+    return SptLampiranRow(
+        nama=slip.recipient_name,
+        identitas=slip.recipient_identity_number,
+        nomor_dokumen=slip.withholding_number,
+        tanggal_dokumen=tanggal,
+        kjs=_slip_kjs(slip),
+        pph=slip.income_tax,
+        source_type="withholding_slip",
+        source_id=slip.id,
+    )
 #: Faktur Pajak kode → (Bagian I section, label) mapping, as the real form
 #: groups penyerahan rows by FP kode.
 PENYERAHAN_SECTIONS: dict[str, tuple[str, str]] = {
@@ -62,6 +162,7 @@ def compute_available_overpayment(session: Session, tax_return: TaxReturn) -> in
 
     Sisa = Σ lebih bayar tercatat − Σ kompensasi yang sudah dipakai. A carryover
     survives until a later SPT consumes it through its own II.E row.
+    SPT yang lebih bayarnya direstitusi tidak ikut: saldonya keluar dari rantai.
     """
     earlier = session.exec(
         select(TaxReturn).where(
@@ -70,6 +171,10 @@ def compute_available_overpayment(session: Session, tax_return: TaxReturn) -> in
             TaxReturn.return_type == TaxReturnType.ppn,
             TaxReturn.status == TaxReturnStatus.reported,
             TaxReturn.id != tax_return.id,
+            or_(
+                TaxReturn.lb_treatment.is_(None),
+                TaxReturn.lb_treatment != LbTreatment.restitusi,
+            ),
             (
                 (TaxReturn.tax_year < tax_return.tax_year)
                 | (
