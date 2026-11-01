@@ -30,7 +30,7 @@ from app.models.enums import (
 )
 from app.models.school_class import SchoolClass
 from app.models.tax_input_invoice import TaxInputInvoice, TaxInputLine
-from app.models.tax_invoice import TaxInvoice, TaxInvoiceLine
+from app.models.tax_invoice import TaxInvoice
 from app.models.user import User
 from app.schemas.tax_input_invoice import (
     DPP_OTHER_CODES,
@@ -52,6 +52,11 @@ from app.schemas.tax_input_invoice import (
     TaxInputUpdate,
 )
 from app.services.audit import log_action
+from app.services.faktur_masukan import (
+    apply_source_header,
+    build_input_line_from_source,
+    list_source_lines,
+)
 
 LABEL = "Faktur Pajak Masukan"
 MAX_EXPORT_ROWS = 5_000
@@ -601,21 +606,6 @@ def create_input_invoice(
             )
 
     payload = data.model_dump(exclude={"class_id", "siswa_id", "lines", "source_invoice_id"})
-    # If source present, override some fields from source when not explicitly provided
-    if source is not None:
-        # Copy invoice_number and seller info from source; keep buyer's own identity as target
-        if not payload.get("invoice_number"):
-            payload["invoice_number"] = source.invoice_number
-        if not payload.get("seller_name"):
-            payload["seller_name"] = source.seller_name
-        if not payload.get("seller_npwp"):
-            payload["seller_npwp"] = source.seller_npwp
-        if not payload.get("seller_address"):
-            payload["seller_address"] = source.seller_address
-        if not payload.get("seller_idtku"):
-            payload["seller_idtku"] = source.seller_idtku
-        # Use source's transaction_code/date etc if not overridden? For latihan, keep payload's own values
-        # But ensure invoice_number is copied
 
     invoice = TaxInputInvoice(
         **payload,
@@ -625,32 +615,18 @@ def create_input_invoice(
         created_by_id=current_user.id,
         source_invoice_id=data.source_invoice_id,
     )
+    # If source present, fill empty seller/invoice-number fields from the source.
+    if source is not None:
+        apply_source_header(invoice, source, payload)
     session.add(invoice)
     session.flush()
 
     # Build lines
     if data.source_invoice_id is not None and not data.lines:
         # Copy lines from source keluaran
-        source_lines = session.exec(
-            select(TaxInvoiceLine).where(TaxInvoiceLine.invoice_id == source.id).order_by(TaxInvoiceLine.line_order)
-        ).all()
-        for order, sline in enumerate(source_lines):
-            # Map keluaran line fields to masukan line
+        for order, sline in enumerate(list_source_lines(session, source.id)):
             session.add(
-                TaxInputLine(
-                    invoice_id=invoice.id,
-                    line_order=order,
-                    line_type=sline.line_type,
-                    item_code=sline.item_code,
-                    item_name=sline.item_name,
-                    unit=sline.unit,
-                    unit_price=sline.unit_price,
-                    quantity_milli=sline.quantity_milli,
-                    discount=sline.discount,
-                    use_dpp_other=sline.use_dpp_other,
-                    ppn_rate_basis_points=sline.ppn_rate_basis_points,
-                    ppnbm_rate_basis_points=sline.ppnbm_rate_basis_points,
-                )
+                build_input_line_from_source(sline, invoice_id=invoice.id, line_order=order)
             )
     else:
         for order, line_data in enumerate(data.lines):
