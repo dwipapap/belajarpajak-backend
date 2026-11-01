@@ -150,3 +150,12 @@ class BillingStatus(StrEnum):
 
     unpaid = "unpaid"
     paid = "paid"
+    #: SPT went back from awaiting payment to draft; the code can never be paid.
+    cancelled = "cancelled"
+
+
+class LbTreatment(StrEnum):
+    """Perlakuan lebih bayar PPN: dikompensasikan atau dikembalikan (restitusi)."""
+
+    kompensasi = "kompensasi"
+    restitusi = "restitusi"
