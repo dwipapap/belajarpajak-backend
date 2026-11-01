@@ -356,9 +356,7 @@ def submit_return(
             mutation = pakai_deposit(
                 session, current_user, tax_return.amount_due, "spt", tax_return.id
             )
-            spt_service.mark_sources_reported(session, tax_return)
-            tax_return.status = TaxReturnStatus.reported
-            tax_return.submitted_at = datetime.now(tz=UTC)
+            spt_service.mark_reported(session, tax_return, now=datetime.now(tz=UTC))
             tax_return.submitted_by_id = current_user.id
             tax_return.payment_ref = f"DEPOSIT:{mutation.id}"
             summary = (
@@ -374,9 +372,7 @@ def submit_return(
                 "kode billing diterbitkan"
             )
     else:
-        spt_service.mark_sources_reported(session, tax_return)
-        tax_return.status = TaxReturnStatus.reported
-        tax_return.submitted_at = datetime.now(tz=UTC)
+        spt_service.mark_reported(session, tax_return, now=datetime.now(tz=UTC))
         tax_return.submitted_by_id = current_user.id
         summary = (
             f"Melaporkan SPT {tax_return.return_type.value} masa "
@@ -414,6 +410,9 @@ def create_pembetulan(
     tax_return.status = TaxReturnStatus.draft
     tax_return.submitted_at = None
     tax_return.submitted_by_id = None
+    # Old receipt stays in the audit log; the reopened row gets a fresh BPE on report.
+    tax_return.bpe_number = None
+    tax_return.received_at = None
     for line in session.exec(
         select(TaxReturnLine).where(TaxReturnLine.return_id == tax_return.id)
     ).all():
@@ -483,6 +482,30 @@ def get_return_billing(
             detail="Belum ada kode billing untuk SPT ini",
         )
     return BillingRead.model_validate(billing.model_dump())
+
+
+@router.get("/{return_id}/bpe", dependencies=[_roles])
+def download_bpe(
+    return_id: int,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> Response:
+    """Unduh BPE (PDF) untuk SPT yang sudah dilaporkan."""
+    from app.services.spt_bpe_pdf import render_spt_bpe_pdf
+
+    tax_return = _get_accessible_return(return_id, current_user, session)
+    if tax_return.status != TaxReturnStatus.reported or not tax_return.bpe_number:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="BPE hanya tersedia untuk SPT yang sudah dilaporkan",
+        )
+    pdf_bytes = render_spt_bpe_pdf(tax_return)
+    filename = tax_return.bpe_number.replace("/", "-")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="BPE-{filename}.pdf"'},
+    )
 
 
 @router.patch("/{return_id}/review", response_model=TaxReturnRead, dependencies=[_review_roles])

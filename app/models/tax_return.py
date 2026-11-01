@@ -86,6 +86,12 @@ class TaxReturn(TimestampMixin, table=True):
         sa_column=Column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
     )
 
+    #: Bukti Penerimaan Elektronik number, issued once the SPT is reported.
+    #: Format ``BPE-SIM-{urut:05d}/{YYYY}``, sequential per tenant per year.
+    bpe_number: str | None = Field(default=None, max_length=20, unique=True, index=True)
+    #: When the SPT was received (reported). Mirrors submitted_at on first report.
+    received_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
     # --- Bagian I (PPN penyerahan), aggregated from issued faktur keluaran ---
     penyerahan_dpp: int = Field(default=0, ge=0, sa_type=BigInteger)
     penyerahan_dpp_nilai_lain: int = Field(default=0, ge=0, sa_type=BigInteger)

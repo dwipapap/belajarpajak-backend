@@ -9,6 +9,8 @@ freely while the SPT is still a draft.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlmodel import Session, select
 
 from app.models.billing import BillingCode, BillingLine
@@ -467,6 +469,55 @@ def ensure_billing(session: Session, tax_return: TaxReturn) -> BillingCode:
         session, billing, billing_line_rows_for_spt(session, tax_return)
     )
     return billing
+
+
+def generate_bpe_number(session: Session, tax_return: TaxReturn) -> str:
+    """BPE number ``BPE-SIM-{urut:05d}/{YYYY}``, sequential per tenant per year.
+
+    Same advisory-lock pattern as NSFP and billing numbering: the
+    transaction-level lock serialises concurrent reports of the same tenant +
+    year, so ``MAX(serial) + 1`` cannot race. The SIM prefix marks the number
+    as a learning-simulator artefact (never the real ``BPE-…/CT/KPP.`` shape).
+    """
+    from sqlalchemy import text as sa_text
+
+    session.execute(
+        sa_text("SELECT pg_advisory_xact_lock(:key1, :key2)"),
+        {"key1": tax_return.tenant_id, "key2": 30_000_000 + tax_return.tax_year},
+    )
+    prefix = f"BPE-SIM-%/{tax_return.tax_year}"
+    existing = session.exec(
+        select(TaxReturn.bpe_number).where(
+            TaxReturn.tenant_id == tax_return.tenant_id,
+            TaxReturn.bpe_number.is_not(None),
+            TaxReturn.bpe_number.like(prefix),
+        )
+    ).all()
+    serials = [
+        int(number[8:13])
+        for number in existing
+        if len(number) == 18 and number[8:13].isdigit()
+    ]
+    serial = max(serials, default=0) + 1
+    if serial > 99_999:
+        raise ValueError("Serial BPE melebihi kapasitas tahun berjalan")
+    return f"BPE-SIM-{serial:05d}/{tax_return.tax_year}"
+
+
+def mark_reported(session: Session, tax_return: TaxReturn, *, now: datetime) -> TaxReturn:
+    """Single place that turns an SPT into ``reported``.
+
+    Fills ``status``, ``received_at``/``submitted_at`` and ``bpe_number``,
+    then flags the source documents via :func:`mark_sources_reported`.
+    """
+    mark_sources_reported(session, tax_return)
+    tax_return.status = TaxReturnStatus.reported
+    tax_return.received_at = now
+    tax_return.submitted_at = now
+    if not tax_return.bpe_number:
+        tax_return.bpe_number = generate_bpe_number(session, tax_return)
+    session.add(tax_return)
+    return tax_return
 
 
 def mark_sources_reported(session: Session, tax_return: TaxReturn) -> None:
