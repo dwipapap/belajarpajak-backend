@@ -210,8 +210,10 @@ SPT Masa PPN + PPh Unifikasi + PPh 21/26 (`/api/v1/spt`, `TaxReturnType`: `ppn`,
 | POST | `/api/v1/spt/{return_id}/posting` | Aggregate faktur/slip into lines (idempotent) |
 | POST | `/api/v1/spt/{return_id}/pernyataan` | Sign statement (`wajib_pajak` / `kuasa_wajib_pajak`) |
 | POST | `/api/v1/spt/{return_id}/submit?metode=billing\|deposit` | Bayar dan Lapor (`{passphrase}`); kurang bayar → billing + `awaiting_payment`, or deducted from deposit → `reported` |
-| POST | `/api/v1/spt/{return_id}/pembetulan` | Correction (same-row new version) |
+| POST | `/api/v1/spt/{return_id}/pembetulan` | Correction (same-row new version; clears `bpe_number`/`received_at`) |
 | GET | `/api/v1/spt/{return_id}/billing` | Linked billing code |
+| GET | `/api/v1/spt/{return_id}/bpe` | BPE receipt PDF (reported only; `bpe_number` `BPE-SIM-{urut:05d}/{YYYY}` per tenant per year, issued via `services/spt.py::mark_reported`) |
+| GET | `/api/v1/dokumen-saya?jenis=&tahun=` | Siswa download list: `bpe_spt` + `bukti_potong` (issued) + `kode_billing` rows with `download_path` |
 | PATCH | `/api/v1/spt/{return_id}/review` | Score + feedback (guru/admin) |
 | DELETE | `/api/v1/spt/{return_id}` | Delete draft |
 

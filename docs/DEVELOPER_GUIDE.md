@@ -407,7 +407,7 @@ Semua tabel di bawah memakai `TimestampMixin` + `tenant_id` (tenant-scoped) kecu
 
 - `tax_invoices` (`TaxInvoice`) + `tax_invoice_lines` (`TaxInvoiceLine`): Faktur Keluaran. Status `draft`/`issued`/`invalid`, kind `normal`/`pengganti`/`dibatalkan`, line type `barang`/`jasa`, buyer identity `npwp`/`nik`/`paspor`/`identitas_lain`. Uang integer, hitung server (DPP/PPN/PPnBM incl. DPP Nilai Lain 11/12). Terbit wajib `kode_otorisasi` (cek `services/signing.py`); penandatangan di `signer_id`/`signer_name`. Skor + feedback review seperti slip.
 - `tax_input_invoices` (`TaxInputInvoice`) + `tax_input_lines`: Faktur Masukan. Status sama; `credit_status` `not_credited`/`credited` menentukan agregasi ke SPT Bagian II. Cancel admin-only.
-- `tax_returns` (`TaxReturn`) + `tax_return_lines` (`TaxReturnLine`): SPT Masa. `return_type` `ppn`/`pph_unifikasi`, `kind` `normal`/`pembetulan`, `status` `draft`/`awaiting_payment`/`reported`. Alur: create → posting (agregasi via `services/spt.py`) → pernyataan (`wajib_pajak`/`kuasa_wajib_pajak`) → submit (buat billing bila kurang bayar) → pembetulan → billing.
+- `tax_returns` (`TaxReturn`) + `tax_return_lines` (`TaxReturnLine`): SPT Masa. `return_type` `ppn`/`pph_unifikasi`, `kind` `normal`/`pembetulan`, `status` `draft`/`awaiting_payment`/`reported`. Alur: create → posting (agregasi via `services/spt.py`) → pernyataan (`wajib_pajak`/`kuasa_wajib_pajak`) → submit (buat billing bila kurang bayar; lapor via `mark_reported`: isi `status` + `received_at` + `bpe_number` `BPE-SIM-{urut:05d}/{YYYY}` per tenant per tahun) → pembetulan (kosongkan BPE) → billing. BPE PDF via `services/spt_bpe_pdf.py`; unduhan siswa via `GET /dokumen-saya`.
 - `billing_codes` (`BillingCode`): 15-digit `{KAP-KJS:6}{MM:2}{YY:2}{serial:5}`, `status` `unpaid`/`paid`, nullable `spt_id`, `tagihan_id`, `metode`, dan saat bayar `kanal` + `ntpn` + `no_bpn`. PDF via `services/billing_pdf.py`, KAP-KJS via `services/kjs.py`.
 - `billing_lines` (`BillingLine`): rincian per KAP-KJS + masa untuk billing multi-detail (mis. SPT PPh Unifikasi dengan beberapa KJS).
 - `deposit_accounts` (`DepositAccount`, saldo per user; `tenant_id` nullable untuk superadmin) + `deposit_mutations` (`DepositMutation`, jenis `topup`/`pakai`, `ref_type`/`ref_id`, idempoten). Top-up = billing mandiri KAP 411618-100 yang sudah dibayar.
@@ -480,8 +480,9 @@ disimpan sebagai enum native PostgreSQL).
 | faktur keluaran/masukan: baca | semua | tenantnya | kelas yang diajar | miliknya |
 | faktur: buat/ubah/hapus/terbit/credit | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
 | faktur: review (masukan cancel admin-only) | ✅ | ✅ | ✅ | ❌ |
-| spt: baca/buat/posting/pernyataan/submit/pembetulan | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
+| spt: baca/buat/posting/pernyataan/submit/pembetulan/bpe | ✅ | ✅ (tenant) | ✅ (kelas) | ✅ (miliknya) |
 | spt: review | ✅ | ✅ | ✅ | ❌ |
+| dokumen-saya: baca | ❌ | ❌ | ❌ | ✅ (miliknya) |
 | billings: baca/pdf | semua | tenantnya | kelas yang diajar | miliknya |
 | billings: pay | ✅ | ✅ | ✅ | ✅ (miliknya) |
 | audit-logs: baca | ✅ | ✅ | ❌ | ❌ |
@@ -1300,8 +1301,12 @@ Kode Otorisasi diperiksa oleh `app/services/signing.py::require_kode_otorisasi`
 `POST /{return_id}/pernyataan` (signer `wajib_pajak`/`kuasa_wajib_pajak`),
 `POST /{return_id}/submit?metode=billing|deposit` (body `{passphrase}`; kurang bayar → billing + `awaiting_payment`, atau dipotong dari deposit → langsung `reported`),
 `POST /{return_id}/pembetulan`, `DELETE /{return_id}` (draft saja),
-`GET /{return_id}/billing`, `PATCH /{return_id}/review`.
-Status `draft`/`awaiting_payment`/`reported`.
+`GET /{return_id}/billing`, `GET /{return_id}/bpe` (PDF BPE, reported saja),
+`PATCH /{return_id}/review`.
+Status `draft`/`awaiting_payment`/`reported`. Lapor selalu lewat
+`services/spt.py::mark_reported` (satu-satunya penulis `bpe_number`/`received_at`).
+**Dokumen Saya** (`app/routers/dokumen_saya.py`, prefix `/dokumen-saya`, siswa saja):
+`GET /?jenis=bpe_spt|bukti_potong|kode_billing&tahun=` → `{items: DokumenSayaRow[], total}`.
 
 **Billing & PDF** (`app/routers/billings.py`, service `billing_pdf.py`, `kjs.py`):
 `GET /billings`, `GET /billings/{billing_id}`,
