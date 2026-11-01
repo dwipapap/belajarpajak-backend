@@ -84,20 +84,81 @@ def compute_available_overpayment(session: Session, tax_return: TaxReturn) -> in
     return max(lebih - dipakai, 0)
 
 
+def select_ppn_keluaran(session: Session, tax_return: TaxReturn) -> list[TaxInvoice]:
+    """Issued faktur keluaran of the SPT period — the Bagian I source set."""
+    return list(
+        session.exec(
+            select(TaxInvoice).where(
+                TaxInvoice.tenant_id == tax_return.tenant_id,
+                TaxInvoice.siswa_id == tax_return.siswa_id,
+                TaxInvoice.tax_year == tax_return.tax_year,
+                TaxInvoice.tax_month == tax_return.tax_month,
+                TaxInvoice.status == TaxInvoiceStatus.issued,
+            )
+        ).all()
+    )
+
+
+def select_ppn_masukan(session: Session, tax_return: TaxReturn) -> list[TaxInputInvoice]:
+    """Credited faktur masukan of the SPT period — the Bagian II source set."""
+    return list(
+        session.exec(
+            select(TaxInputInvoice).where(
+                TaxInputInvoice.tenant_id == tax_return.tenant_id,
+                TaxInputInvoice.siswa_id == tax_return.siswa_id,
+                TaxInputInvoice.tax_year == tax_return.tax_year,
+                TaxInputInvoice.tax_month == tax_return.tax_month,
+                TaxInputInvoice.credit_status == TaxInputCreditStatus.credited,
+            )
+        ).all()
+    )
+
+
+def select_pph_slips(session: Session, tax_return: TaxReturn) -> list[WithholdingSlip]:
+    """Issued withholding slips of the SPT period — the Induk B source set.
+
+    PPh unifikasi aggregates BP23/BP26/BPPU; SPT PPh 21/26 aggregates the
+    monthly-slip set (BPMP/BP26/BP21).
+    """
+    if _is_pph21_26(tax_return.return_type):
+        source_types = PPh_21_26_SOURCE_TYPES
+    else:
+        source_types = (SlipType.bp23, SlipType.bp26, SlipType.bppu)
+    return list(
+        session.exec(
+            select(WithholdingSlip).where(
+                WithholdingSlip.tenant_id == tax_return.tenant_id,
+                WithholdingSlip.siswa_id == tax_return.siswa_id,
+                WithholdingSlip.tax_year == tax_return.tax_year,
+                WithholdingSlip.tax_month == tax_return.tax_month,
+                WithholdingSlip.status == SlipStatus.issued,
+                WithholdingSlip.slip_type.in_(source_types),
+            )
+        ).all()
+    )
+
+
+def select_sp_slips(session: Session, tax_return: TaxReturn) -> list[WithholdingSlip]:
+    """Issued setor-sendiri (SP) slips of the SPT period — the DAFTAR-I source."""
+    return list(
+        session.exec(
+            select(WithholdingSlip).where(
+                WithholdingSlip.tenant_id == tax_return.tenant_id,
+                WithholdingSlip.siswa_id == tax_return.siswa_id,
+                WithholdingSlip.tax_year == tax_return.tax_year,
+                WithholdingSlip.tax_month == tax_return.tax_month,
+                WithholdingSlip.status == SlipStatus.issued,
+                WithholdingSlip.slip_type == SlipType.sp,
+            )
+        ).all()
+    )
+
+
 def _ppn_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
     """Aggregate Bagian I (issued faktur keluaran) and Bagian II (credited masukan)."""
     aggregated: dict[tuple[str, str], dict[str, int]] = {}
 
-    keluaran = session.exec(
-        select(TaxInvoice).where(
-            TaxInvoice.tenant_id == tax_return.tenant_id,
-            TaxInvoice.siswa_id == tax_return.siswa_id,
-            TaxInvoice.tax_year == tax_return.tax_year,
-            TaxInvoice.tax_month == tax_return.tax_month,
-            TaxInvoice.status == TaxInvoiceStatus.issued,
-        )
-    ).all()
-    for invoice in keluaran:
+    for invoice in select_ppn_keluaran(session, tax_return):
         section, _label = PENYERAHAN_SECTIONS.get(
             invoice.transaction_code, ("I_A4", "Penyerahan lainnya")
         )
@@ -110,16 +171,7 @@ def _ppn_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
         row["ppn"] += invoice.total_ppn
         row["ppnbm"] += invoice.total_ppnbm
 
-    masukan = session.exec(
-        select(TaxInputInvoice).where(
-            TaxInputInvoice.tenant_id == tax_return.tenant_id,
-            TaxInputInvoice.siswa_id == tax_return.siswa_id,
-            TaxInputInvoice.tax_year == tax_return.tax_year,
-            TaxInputInvoice.tax_month == tax_return.tax_month,
-            TaxInputInvoice.credit_status == TaxInputCreditStatus.credited,
-        )
-    ).all()
-    for invoice in masukan:
+    for invoice in select_ppn_masukan(session, tax_return):
         section, _label = MASUKAN_SECTIONS.get(
             invoice.transaction_code, ("II_C", "Perolehan lainnya (FP Kode 01, 09 dan 10)")
         )
@@ -146,9 +198,10 @@ def _ppn_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
         for (section, code), amounts in aggregated.items()
     ]
     # The II.E compensation row appears whenever a carryover is consumed.
+    masukan_for_kompensasi = select_ppn_masukan(session, tax_return)
     kompensasi = min(
         compute_available_overpayment(session, tax_return),
-        sum(invoice.total_ppn for invoice in masukan),
+        sum(invoice.total_ppn for invoice in masukan_for_kompensasi),
     )
     if kompensasi > 0:
         lines.append(
@@ -175,17 +228,7 @@ def _pph21_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]
     grouped by the PPh 21/26 KJS catalog.
     """
     aggregated: dict[str, dict[str, int]] = {}
-    slips = session.exec(
-        select(WithholdingSlip).where(
-            WithholdingSlip.tenant_id == tax_return.tenant_id,
-            WithholdingSlip.siswa_id == tax_return.siswa_id,
-            WithholdingSlip.tax_year == tax_return.tax_year,
-            WithholdingSlip.tax_month == tax_return.tax_month,
-            WithholdingSlip.status == SlipStatus.issued,
-            WithholdingSlip.slip_type.in_(PPh_21_26_SOURCE_TYPES),
-        )
-    ).all()
-    for slip in slips:
+    for slip in select_pph_slips(session, tax_return):
         row = aggregated.setdefault(
             _slip_kjs(slip), {"setor_sendiri": 0, "pemotongan": 0, "ditanggung_pemerintah": 0}
         )
@@ -242,19 +285,8 @@ def _pph_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
     pph_unifikasi aggregates BP23/BP26/BPPU. SPT PPh 21/26 under either
     spelling is served by :func:`_pph21_lines` via :func:`posting`.
     """
-    wanted = [SlipType.bp23, SlipType.bp26, SlipType.bppu]
     aggregated: dict[str, dict[str, int]] = {}
-    slips = session.exec(
-        select(WithholdingSlip).where(
-            WithholdingSlip.tenant_id == tax_return.tenant_id,
-            WithholdingSlip.siswa_id == tax_return.siswa_id,
-            WithholdingSlip.tax_year == tax_return.tax_year,
-            WithholdingSlip.tax_month == tax_return.tax_month,
-            WithholdingSlip.status == SlipStatus.issued,
-            WithholdingSlip.slip_type.in_(wanted),
-        )
-    ).all()
-    for slip in slips:
+    for slip in select_pph_slips(session, tax_return):
         row = aggregated.setdefault(
             _slip_kjs(slip), {"setor_sendiri": 0, "pemotongan": 0, "ditanggung_pemerintah": 0}
         )
@@ -527,42 +559,13 @@ def mark_sources_reported(session: Session, tax_return: TaxReturn) -> None:
     faktur/bupot that made it into a filed SPT carries the flag thereafter.
     """
     if tax_return.return_type == TaxReturnType.ppn:
-        for invoice in session.exec(
-            select(TaxInvoice).where(
-                TaxInvoice.tenant_id == tax_return.tenant_id,
-                TaxInvoice.siswa_id == tax_return.siswa_id,
-                TaxInvoice.tax_year == tax_return.tax_year,
-                TaxInvoice.tax_month == tax_return.tax_month,
-                TaxInvoice.status == TaxInvoiceStatus.issued,
-            )
-        ).all():
+        for invoice in select_ppn_keluaran(session, tax_return):
             invoice.spt_flag = SlipSptFlag.reported_in_spt
             session.add(invoice)
-        for invoice in session.exec(
-            select(TaxInputInvoice).where(
-                TaxInputInvoice.tenant_id == tax_return.tenant_id,
-                TaxInputInvoice.siswa_id == tax_return.siswa_id,
-                TaxInputInvoice.tax_year == tax_return.tax_year,
-                TaxInputInvoice.tax_month == tax_return.tax_month,
-                TaxInputInvoice.credit_status == TaxInputCreditStatus.credited,
-            )
-        ).all():
+        for invoice in select_ppn_masukan(session, tax_return):
             invoice.spt_flag = SlipSptFlag.reported_in_spt
             session.add(invoice)
     else:
-        if _is_pph21_26(tax_return.return_type):
-            source_types = PPh_21_26_SOURCE_TYPES
-        else:
-            source_types = (SlipType.bp23, SlipType.bp26, SlipType.bppu)
-        for slip in session.exec(
-            select(WithholdingSlip).where(
-                WithholdingSlip.tenant_id == tax_return.tenant_id,
-                WithholdingSlip.siswa_id == tax_return.siswa_id,
-                WithholdingSlip.tax_year == tax_return.tax_year,
-                WithholdingSlip.tax_month == tax_return.tax_month,
-                WithholdingSlip.status == SlipStatus.issued,
-                WithholdingSlip.slip_type.in_(source_types),
-            )
-        ).all():
+        for slip in select_pph_slips(session, tax_return):
             slip.spt_flag = SlipSptFlag.reported_in_spt
             session.add(slip)
