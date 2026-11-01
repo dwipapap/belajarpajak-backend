@@ -15,18 +15,35 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
-from app.models.billing import BillingCode
+from app.models.billing import BillingCode, BillingLine
 from app.models.enums import BillingStatus, Role, TaxReturnStatus
 from app.models.school_class import SchoolClass
 from app.models.tax_return import TaxReturn
 from app.models.user import User
-from app.schemas.tax_return import BillingCreate, BillingListResponse, BillingRead
+from app.schemas.tax_return import (
+    BillingCreate,
+    BillingListResponse,
+    BillingPay,
+    BillingRead,
+)
 
 router = APIRouter(prefix="/billings", tags=["billings"])
 
 _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
 # Paying a billing mutates the SPT — superadmin stays read-only.
 _write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
+
+
+def billing_to_read(session: Session, billing: BillingCode) -> BillingRead:
+    from app.services import kjs as kjs_service
+
+    data = billing.model_dump()
+    lines = session.exec(
+        select(BillingLine).where(BillingLine.billing_id == billing.id).order_by(BillingLine.id)
+    ).all()
+    data["lines"] = [line.model_dump() for line in lines]
+    data["kanal_label"] = kjs_service.kanal_label(getattr(billing, "kanal", "teller"))
+    return BillingRead.model_validate(data)
 
 
 def can_read_billing(session: Session, current_user: User, billing: BillingCode) -> bool:
@@ -101,7 +118,7 @@ def list_billings(
     total = session.exec(base_count).one()
     items = session.exec(base_items).all()
     return BillingListResponse(
-        items=[BillingRead.model_validate(item.model_dump()) for item in items],
+        items=[billing_to_read(session, item) for item in items],
         total=total,
     )
 
@@ -184,6 +201,9 @@ def create_mandiri_billing(
     )
     session.add(billing)
     session.flush()
+    spt_service.sync_billing_lines(
+        session, billing, [(data.kap_kjs, data.masa_pajak, data.amount)]
+    )
     log_action(
         session,
         actor=current_user,
@@ -195,7 +215,7 @@ def create_mandiri_billing(
     )
     session.commit()
     session.refresh(billing)
-    return BillingRead.model_validate(billing.model_dump())
+    return billing_to_read(session, billing)
 
 
 @router.get("/{billing_id}", response_model=BillingRead, dependencies=[_roles])
@@ -205,7 +225,7 @@ def get_billing(
     session: SessionDep,
 ) -> BillingRead:
     billing = _get_accessible_billing(billing_id, current_user, session)
-    return BillingRead.model_validate(billing.model_dump())
+    return billing_to_read(session, billing)
 
 
 @router.get("/{billing_id}/pdf", dependencies=[_roles])
@@ -231,8 +251,11 @@ def pay_billing(
     billing_id: int,
     current_user: CurrentUser,
     session: SessionDep,
+    data: BillingPay | None = None,
 ) -> BillingRead:
     """Simulate settling the billing and report the linked SPT."""
+    from app.services import kjs as kjs_service
+
     billing = _get_accessible_billing(billing_id, current_user, session)
     if billing.status == BillingStatus.paid:
         raise HTTPException(
@@ -240,8 +263,18 @@ def pay_billing(
             detail="Kode billing sudah dibayar",
         )
 
+    kanal = (data.kanal if data and data.kanal else "teller").lower()
+    if kanal not in kjs_service.KANAL_CHOICES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Kanal {kanal} tidak dikenal",
+        )
+
     billing.status = BillingStatus.paid
     billing.paid_at = datetime.now(tz=UTC)
+    billing.kanal = kanal
+    billing.ntpn = kjs_service.ntpn_for_code(billing.code)
+    billing.no_bpn = kjs_service.bpn_for_code(billing.code)
     session.add(billing)
 
     if billing.spt_id is not None:
@@ -268,4 +301,4 @@ def pay_billing(
     )
     session.commit()
     session.refresh(billing)
-    return BillingRead.model_validate(billing.model_dump())
+    return billing_to_read(session, billing)

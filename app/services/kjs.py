@@ -57,6 +57,34 @@ def pasal_for_kjs(kjs: str) -> str | None:
     return None
 
 
+#: Payment channels accepted by POST /billings/{id}/pay.
+KANAL_CHOICES: tuple[str, ...] = ("teller", "atm", "mbanking", "ibanking", "pos")
+
+KANAL_LABELS: dict[str, str] = {
+    "teller": "Teller",
+    "atm": "ATM",
+    "mbanking": "Mobile Banking",
+    "ibanking": "Internet Banking",
+    "pos": "Kantor Pos",
+}
+
+
+def kanal_label(kanal: str | None) -> str:
+    """Human label for a payment channel code (fallback: raw code)."""
+    return KANAL_LABELS.get(kanal or "", kanal or "-")
+
+
+#: NTPN (16 digit) deterministik dari kode billing + nomor BPN.
+def ntpn_for_code(code: str) -> str:
+    digits = "".join(ch for ch in code if ch.isdigit())
+    checksum = sum(int(d) for d in digits) % 10 if digits else 0
+    return f"{digits}{checksum}"[:16].rjust(16, "0")
+
+
+def bpn_for_code(code: str) -> str:
+    return f"BPN{code}"
+
+
 #: Whitelist for Layanan Mandiri Kode Billing (YAGNI: 1 code, 1 period, 1 amount).
 #: Matches what students already meet in slips — no new codes to memorise.
 MANDIRI_KJS: tuple[str, ...] = (
@@ -66,6 +94,7 @@ MANDIRI_KJS: tuple[str, ...] = (
     "411127-110",
     "411128-100",
     "411122-100",
+    "411618-100",
 )
 
 MANDIRI_KJS_LABELS: dict[str, str] = {
@@ -75,6 +104,7 @@ MANDIRI_KJS_LABELS: dict[str, str] = {
     "411127-110": "PPh 26",
     "411128-100": "PPh Final 4(2)",
     "411122-100": "PPh 22",
+    "411618-100": "Deposit (Top-up)",
 }
 
 

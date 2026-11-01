@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from sqlmodel import Session, select
 
-from app.models.billing import BillingCode
+from app.models.billing import BillingCode, BillingLine
 from app.models.enums import (
     BillingStatus,
     SlipSptFlag,
@@ -384,6 +384,50 @@ def generate_code(
     return f"{digits}{tax_month:02d}{tax_year % 100:02d}{serial:05d}"
 
 
+def billing_line_rows_for_spt(
+    session: Session, tax_return: TaxReturn
+) -> list[tuple[str, str, int]]:
+    """(kap_kjs, masa_pajak, amount) rows for one billing: 1 row per KJS terutang."""
+    masa = f"{tax_return.tax_month:02d}{tax_return.tax_year}"
+    if tax_return.return_type == TaxReturnType.ppn:
+        return [(kjs.KJS_PPN_MASA, masa, tax_return.amount_due)]
+    lines = session.exec(
+        select(TaxReturnLine).where(TaxReturnLine.return_id == tax_return.id)
+    ).all()
+    per_kjs: dict[str, int] = {}
+    for line in lines:
+        if line.pemotongan > 0:
+            per_kjs[line.code] = per_kjs.get(line.code, 0) + line.pemotongan
+    if not per_kjs:
+        top = max(lines, key=lambda line: line.pemotongan, default=None)
+        kap = top.code if top is not None and top.pemotongan > 0 else "-"
+        return [(kap, masa, tax_return.amount_due)]
+    return [(code, masa, amount) for code, amount in sorted(per_kjs.items())]
+
+
+def sync_billing_lines(
+    session: Session, billing: BillingCode, rows: list[tuple[str, str, int]]
+) -> None:
+    """Replace a billing's lines wholesale; total = sum(lines)."""
+    for existing in session.exec(
+        select(BillingLine).where(BillingLine.billing_id == billing.id)
+    ).all():
+        session.delete(existing)
+    session.flush()
+    for kap_kjs, masa_pajak, amount in rows:
+        session.add(
+            BillingLine(
+                billing_id=billing.id,
+                kap_kjs=kap_kjs,
+                masa_pajak=masa_pajak,
+                amount=amount,
+            )
+        )
+    billing.amount = sum(amount for _, _, amount in rows)
+    session.add(billing)
+    session.flush()
+
+
 def ensure_billing(session: Session, tax_return: TaxReturn) -> BillingCode:
     """Return the SPT's active unpaid billing, creating one only if needed.
 
@@ -419,6 +463,9 @@ def ensure_billing(session: Session, tax_return: TaxReturn) -> BillingCode:
     )
     session.add(billing)
     session.flush()
+    sync_billing_lines(
+        session, billing, billing_line_rows_for_spt(session, tax_return)
+    )
     return billing
 
 

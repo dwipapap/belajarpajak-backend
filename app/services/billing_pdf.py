@@ -20,7 +20,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from sqlmodel import Session, select
 
-from app.models.billing import BillingCode
+from app.models.billing import BillingCode, BillingLine
 from app.models.enums import TaxReturnType
 from app.models.tax_return import TaxReturn, TaxReturnLine
 from app.services import kjs
@@ -91,10 +91,16 @@ def terbilang(n: int) -> str:
 def billing_detail_rows(session: Session, billing: BillingCode) -> list[tuple[str, str, int]]:
     """(KAP-KJS, masa pajak, nominal) rows for the detail table.
 
-    Derived from the SPT's posted lines so a PPh billing lists one row per
-    pasal KJS with a nonzero amount, exactly like the reference document. The
+    BillingLine rows are the source of truth when present (B4); otherwise fall
+    back to the SPT's posted lines so a PPh billing lists one row per pasal
+    KJS with a nonzero amount, exactly like the reference document. The
     billing's own ``amount`` stays the single source of truth for the total.
     """
+    stored = session.exec(
+        select(BillingLine).where(BillingLine.billing_id == billing.id).order_by(BillingLine.id)
+    ).all()
+    if stored:
+        return [(line.kap_kjs, line.masa_pajak, line.amount) for line in stored]
     if billing.spt_id is None:
         return [(billing.kap_kjs, billing.masa_pajak, billing.amount)]
     tax_return = session.get(TaxReturn, billing.spt_id)
@@ -153,7 +159,12 @@ def render_billing_pdf(session: Session, billing: BillingCode) -> bytes:
         ("MATA UANG", "IDR"),
         ("NOMINAL", f"{billing.amount:,}".replace(",", ".") + ",00"),
         ("JUMLAH DETAIL", len(rows)),
+        ("KANAL", kjs.kanal_label(getattr(billing, "kanal", "teller"))),
     ]
+    if getattr(billing, "ntpn", None):
+        identity.append(("NTPN", billing.ntpn))
+    if getattr(billing, "no_bpn", None):
+        identity.append(("NO BPN", billing.no_bpn))
     for label, value in identity:
         pdf.setFont("Helvetica-Bold", 10.5)
         pdf.drawString(margin, y, label)

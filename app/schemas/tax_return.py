@@ -128,6 +128,14 @@ class TaxReturnSummary(BaseModel):
     total: int = 0
 
 
+class BillingLineRead(BaseModel):
+    id: int
+    billing_id: int
+    kap_kjs: str
+    masa_pajak: str
+    amount: int
+
+
 class BillingRead(BaseModel):
     id: int
     tenant_id: int
@@ -139,9 +147,20 @@ class BillingRead(BaseModel):
     kap_kjs: str
     masa_pajak: str
     uraian: str | None
+    ntpn: str | None = None
+    no_bpn: str | None = None
+    kanal: str = "teller"
+    kanal_label: str | None = None
+    tagihan_id: int | None = None
+    metode: str = "billing"
     paid_at: datetime | None
     created_at: datetime | None
     updated_at: datetime | None
+    lines: list[BillingLineRead] = Field(default_factory=list)
+
+
+class BillingPay(BaseModel):
+    kanal: str | None = Field(default=None, max_length=20)
 
 
 class BillingCreate(BaseModel):

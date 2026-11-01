@@ -312,12 +312,23 @@ def submit_return(
     data: TaxReturnSubmit,
     current_user: CurrentUser,
     session: SessionDep,
+    metode: Annotated[str, Query(description="billing | deposit")] = "billing",
 ) -> TaxReturnRead:
     """Bayar dan Lapor.
 
     PPN dengan nihil/lebih bayar (dan PPh tanpa nominal) langsung dilaporkan;
-    kurang bayar membuat kode billing dan memarkir SPT di 'menunggu pembayaran'.
+    kurang bayar membuat kode billing dan memarkir SPT di 'menunggu pembayaran'
+    — kecuali ``metode='deposit'``: saldo deposit (disinkron dulu dari billing
+    mandiri deposit yang paid) dipotong penuh sekaligus, SPT langsung reported
+    TANPA billing, dan ``payment_ref`` mencatat mutasi deposit pemakai.
     """
+    from app.routers.deposit import pakai_deposit, sinkronisasi_deposit
+
+    if metode not in ("billing", "deposit"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="metode harus 'billing' atau 'deposit'",
+        )
     tax_return = _get_accessible_return(return_id, current_user, session)
     if tax_return.status != TaxReturnStatus.draft:
         raise HTTPException(
@@ -339,13 +350,29 @@ def submit_return(
     spt_service.posting(session, tax_return)
 
     if tax_return.amount_due > 0:
-        spt_service.ensure_billing(session, tax_return)
-        tax_return.status = TaxReturnStatus.awaiting_payment
-        summary = (
-            f"Melaporkan SPT {tax_return.return_type.value} masa "
-            f"{tax_return.tax_month:02d}/{tax_return.tax_year} — kurang bayar, "
-            "kode billing diterbitkan"
-        )
+        if metode == "deposit":
+            # Aturan lunas-sekaligus: tak ada cicilan deposit; saldo kurang → 422.
+            sinkronisasi_deposit(session, current_user)
+            mutation = pakai_deposit(
+                session, current_user, tax_return.amount_due, "spt", tax_return.id
+            )
+            spt_service.mark_sources_reported(session, tax_return)
+            tax_return.status = TaxReturnStatus.reported
+            tax_return.submitted_at = datetime.now(tz=UTC)
+            tax_return.submitted_by_id = current_user.id
+            tax_return.payment_ref = f"DEPOSIT:{mutation.id}"
+            summary = (
+                f"Melaporkan SPT {tax_return.return_type.value} masa "
+                f"{tax_return.tax_month:02d}/{tax_return.tax_year} — lunas via deposit"
+            )
+        else:
+            spt_service.ensure_billing(session, tax_return)
+            tax_return.status = TaxReturnStatus.awaiting_payment
+            summary = (
+                f"Melaporkan SPT {tax_return.return_type.value} masa "
+                f"{tax_return.tax_month:02d}/{tax_return.tax_year} — kurang bayar, "
+                "kode billing diterbitkan"
+            )
     else:
         spt_service.mark_sources_reported(session, tax_return)
         tax_return.status = TaxReturnStatus.reported

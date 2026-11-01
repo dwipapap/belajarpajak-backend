@@ -50,3 +50,28 @@ class BillingCode(TimestampMixin, table=True):
     #: Free-text reference for self-service billing (Ref Tagihan di PDF).
     uraian: str | None = Field(default=None, max_length=200)
     paid_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    #: NTPN (16 digit) + nomor BPN, diisi saat POST /pay sukses.
+    ntpn: str | None = Field(default=None, max_length=16)
+    no_bpn: str | None = Field(default=None, max_length=32)
+    #: Kanal pembayaran (teller|atm|mbanking|ibanking|pos).
+    kanal: str = Field(default="teller", max_length=20)
+    #: Referensi jalur lain (tanpa FK ketat); diisi jalur lain, bukan endpoint billing.
+    tagihan_id: int | None = Field(default=None, nullable=True, index=True)
+    #: 'billing' (kode billing biasa) | 'deposit' (setoran deposit).
+    metode: str = Field(default="billing", max_length=20)
+
+
+class BillingLine(TimestampMixin, table=True):
+    """Rincian per KAP-KJS dalam satu kode billing (B4)."""
+
+    __tablename__ = "billing_lines"
+
+    id: int | None = Field(default=None, primary_key=True)
+    billing_id: int = Field(
+        sa_column=Column(
+            ForeignKey("billing_codes.id", ondelete="CASCADE"), nullable=False, index=True
+        )
+    )
+    kap_kjs: str = Field(max_length=20)
+    masa_pajak: str = Field(max_length=6)  # MMYYYY
+    amount: int = Field(default=0, ge=0, sa_type=BigInteger)

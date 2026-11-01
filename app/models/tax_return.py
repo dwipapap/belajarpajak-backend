@@ -107,6 +107,9 @@ class TaxReturn(TimestampMixin, table=True):
     #: Value the billing is issued for: PPN kurang bayar, or the PPh total.
     amount_due: int = Field(default=0, ge=0, sa_type=BigInteger)
 
+    #: Referensi pembayaran non-billing (mis. "DEPOSIT:<mutation_id>").
+    payment_ref: str | None = Field(default=None, max_length=64)
+
     score: int | None = Field(default=None, ge=0, le=100)
     teacher_feedback: str | None = Field(default=None, max_length=500)
 
