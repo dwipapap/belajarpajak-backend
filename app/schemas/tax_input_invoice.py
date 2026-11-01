@@ -16,6 +16,7 @@ from app.models.enums import (
     BuyerIdentityType,
     SlipSptFlag,
     TaxInputCreditStatus,
+    TaxInputOrigin,
     TaxInvoiceKind,
     TaxInvoiceLineType,
     TaxInvoiceStatus,
@@ -194,6 +195,7 @@ class TaxInputRead(BaseModel):
     credit_status: TaxInputCreditStatus
     credited_at: datetime | None
     source_invoice_id: int | None
+    origin: TaxInputOrigin
 
     is_advance_payment: bool
     is_settlement: bool
@@ -246,6 +248,7 @@ class TaxInputSummary(BaseModel):
     draft: int = 0
     credited: int = 0
     not_credited: int = 0
+    uncredited: int = 0
     invalid: int = 0
     total: int = 0
 
@@ -275,6 +278,16 @@ class TaxInputBulkUncredit(BaseModel):
 
 class TaxInputBulkUncreditResult(BaseModel):
     uncredited: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class TaxInputBulkUncreditDecision(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=200)
+
+
+class TaxInputBulkUncreditDecisionResult(BaseModel):
+    updated: int = 0
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
 

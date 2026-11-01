@@ -19,6 +19,7 @@ from app.models.enums import (
     BuyerIdentityType,
     SlipSptFlag,
     TaxInputCreditStatus,
+    TaxInputOrigin,
     TaxInvoiceKind,
     TaxInvoiceLineType,
     TaxInvoiceStatus,
@@ -71,6 +72,12 @@ class TaxInputInvoice(TimestampMixin, table=True):
         default=None,
         sa_column=Column(
             ForeignKey("tax_invoices.id", ondelete="SET NULL"), nullable=True, index=True
+        ),
+    )
+    origin: TaxInputOrigin = Field(
+        default=TaxInputOrigin.manual,
+        sa_column=Column(
+            SAEnum(TaxInputOrigin, name="tax_input_origin"), nullable=False, index=True
         ),
     )
 

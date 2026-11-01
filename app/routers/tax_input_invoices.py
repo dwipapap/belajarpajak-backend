@@ -25,6 +25,7 @@ from app.models.enums import (
     BuyerIdentityType,
     Role,
     TaxInputCreditStatus,
+    TaxInputOrigin,
     TaxInvoiceKind,
     TaxInvoiceStatus,
 )
@@ -39,6 +40,8 @@ from app.schemas.tax_input_invoice import (
     TaxInputBulkDelete,
     TaxInputBulkDeleteResult,
     TaxInputBulkUncredit,
+    TaxInputBulkUncreditDecision,
+    TaxInputBulkUncreditDecisionResult,
     TaxInputBulkUncreditResult,
     TaxInputCancel,
     TaxInputCreate,
@@ -367,6 +370,7 @@ def _input_conditions(
     seller_name: str | None = None,
     buyer_name: str | None = None,
     invoice_number: str | None = None,
+    origin: TaxInputOrigin | None = None,
     current_user: User,
 ) -> list:
     conditions = []
@@ -374,6 +378,8 @@ def _input_conditions(
         conditions.append(TaxInputInvoice.status == status)
     if credit_status is not None:
         conditions.append(TaxInputInvoice.credit_status == credit_status)
+    if origin is not None:
+        conditions.append(TaxInputInvoice.origin == origin)
     if tax_year is not None:
         conditions.append(TaxInputInvoice.tax_year == tax_year)
     if tax_month is not None:
@@ -413,6 +419,7 @@ def list_input_invoices(
     seller_name: str | None = None,
     buyer_name: str | None = None,
     invoice_number: str | None = None,
+    origin: TaxInputOrigin | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> TaxInputListResponse:
@@ -428,6 +435,7 @@ def list_input_invoices(
         seller_name=seller_name,
         buyer_name=buyer_name,
         invoice_number=invoice_number,
+        origin=origin,
         current_user=current_user,
     )
 
@@ -481,10 +489,12 @@ def input_summary(current_user: CurrentUser, session: SessionDep) -> TaxInputSum
     invalid = status_counts.get(TaxInvoiceStatus.invalid, 0)
     credited = credit_counts.get(TaxInputCreditStatus.credited, 0)
     not_credited = credit_counts.get(TaxInputCreditStatus.not_credited, 0)
+    uncredited = credit_counts.get(TaxInputCreditStatus.uncredited, 0)
     return TaxInputSummary(
         draft=draft,
         credited=credited,
         not_credited=not_credited,
+        uncredited=uncredited,
         invalid=invalid,
         total=sum(status_counts.values()),
     )
@@ -614,6 +624,7 @@ def create_input_invoice(
         siswa_id=siswa_id,
         created_by_id=current_user.id,
         source_invoice_id=data.source_invoice_id,
+        origin=TaxInputOrigin.manual,
     )
     # If source present, fill empty seller/invoice-number fields from the source.
     if source is not None:
@@ -844,6 +855,126 @@ def credit(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> T
     session.commit()
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
+
+
+def _do_tidak_kreditkan(
+    session: Session, invoice: TaxInputInvoice, current_user: User
+) -> TaxInputInvoice:
+    """Mark an Approved (not_credited) invoice as explicitly not credited."""
+    if invoice.status == TaxInvoiceStatus.invalid:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} tidak valid tidak dapat diputuskan")
+    if invoice.credit_status == TaxInputCreditStatus.credited:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} sudah dikreditkan, batalkan kredit dulu")
+    if invoice.credit_status == TaxInputCreditStatus.uncredited:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} sudah berstatus tidak dikreditkan")
+    _check_credit_permission(session, invoice, current_user)
+    invoice.credit_status = TaxInputCreditStatus.uncredited
+    invoice.credited_at = None
+    session.add(invoice)
+    log_action(
+        session,
+        actor=current_user,
+        action="document.uncredit",
+        entity="faktur_masukan",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Tidak mengkreditkan Faktur {invoice.invoice_number} dari {invoice.seller_name}",
+    )
+    return invoice
+
+
+def _do_kembali_approved(
+    session: Session, invoice: TaxInputInvoice, current_user: User
+) -> TaxInputInvoice:
+    """Return an explicitly-uncredited invoice to Approved (not_credited)."""
+    if invoice.credit_status != TaxInputCreditStatus.uncredited:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} tidak dalam status tidak dikreditkan")
+    _check_credit_permission(session, invoice, current_user)
+    invoice.credit_status = TaxInputCreditStatus.not_credited
+    invoice.credited_at = None
+    session.add(invoice)
+    log_action(
+        session,
+        actor=current_user,
+        action="document.uncredit",
+        entity="faktur_masukan",
+        entity_id=invoice.id,
+        tenant_id=invoice.tenant_id,
+        summary=f"Mengembalikan Faktur {invoice.invoice_number} ke status Approved",
+    )
+    return invoice
+
+
+@router.post("/{invoice_id}/tidak-kreditkan", response_model=TaxInputRead, dependencies=[_credit_roles])
+def tidak_kreditkan(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> TaxInputRead:
+    """Tidak Kreditkan Faktur — explicit decision not to credit an Approved invoice."""
+    invoice = _get_accessible_input_invoice(invoice_id, current_user, session)
+    _do_tidak_kreditkan(session, invoice, current_user)
+    session.commit()
+    session.refresh(invoice)
+    return invoice_to_read(session, invoice)
+
+
+@router.post("/{invoice_id}/kembali-approved", response_model=TaxInputRead, dependencies=[_credit_roles])
+def kembali_approved(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> TaxInputRead:
+    """Kembali ke status Approved — undo an explicit tidak-kreditkan decision."""
+    invoice = _get_accessible_input_invoice(invoice_id, current_user, session)
+    _do_kembali_approved(session, invoice, current_user)
+    session.commit()
+    session.refresh(invoice)
+    return invoice_to_read(session, invoice)
+
+
+@router.post("/bulk-tidak-kreditkan", response_model=TaxInputBulkUncreditDecisionResult, dependencies=[_credit_roles])
+def bulk_tidak_kreditkan(
+    data: TaxInputBulkUncreditDecision, current_user: CurrentUser, session: SessionDep
+) -> TaxInputBulkUncreditDecisionResult:
+    result = TaxInputBulkUncreditDecisionResult()
+    for invoice_id in data.ids:
+        try:
+            invoice = session.get(TaxInputInvoice, invoice_id)
+            if invoice is None or not can_read_input_invoice(session, current_user, invoice):
+                result.skipped += 1
+                result.errors.append(f"#{invoice_id}: {LABEL} tidak ditemukan")
+                continue
+            _do_tidak_kreditkan(session, invoice, current_user)
+            session.commit()
+            result.updated += 1
+        except HTTPException as he:
+            session.rollback()
+            result.skipped += 1
+            result.errors.append(f"#{invoice_id}: {he.detail}")
+        except IntegrityError:
+            session.rollback()
+            result.skipped += 1
+            result.errors.append(f"#{invoice_id}: gagal memproses, coba lagi")
+    return result
+
+
+@router.post("/bulk-kembali-approved", response_model=TaxInputBulkUncreditDecisionResult, dependencies=[_credit_roles])
+def bulk_kembali_approved(
+    data: TaxInputBulkUncreditDecision, current_user: CurrentUser, session: SessionDep
+) -> TaxInputBulkUncreditDecisionResult:
+    result = TaxInputBulkUncreditDecisionResult()
+    for invoice_id in data.ids:
+        try:
+            invoice = session.get(TaxInputInvoice, invoice_id)
+            if invoice is None or not can_read_input_invoice(session, current_user, invoice):
+                result.skipped += 1
+                result.errors.append(f"#{invoice_id}: {LABEL} tidak ditemukan")
+                continue
+            _do_kembali_approved(session, invoice, current_user)
+            session.commit()
+            result.updated += 1
+        except HTTPException as he:
+            session.rollback()
+            result.skipped += 1
+            result.errors.append(f"#{invoice_id}: {he.detail}")
+        except IntegrityError:
+            session.rollback()
+            result.skipped += 1
+            result.errors.append(f"#{invoice_id}: gagal memproses, coba lagi")
+    return result
 
 
 @router.post("/{invoice_id}/uncredit", response_model=TaxInputRead, dependencies=[_credit_roles])

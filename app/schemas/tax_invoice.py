@@ -134,6 +134,7 @@ class TaxInvoiceBase(BaseModel):
     buyer_address: str | None = Field(default=None, max_length=255)
     buyer_idtku: str | None = Field(default=None, max_length=32)
     buyer_email: str | None = Field(default=None, max_length=150)
+    buyer_siswa_id: int | None = None
 
 
 class TaxInvoiceCreate(TaxInvoiceBase):
@@ -172,6 +173,7 @@ class TaxInvoiceUpdate(BaseModel):
     buyer_address: str | None = Field(default=None, max_length=255)
     buyer_idtku: str | None = Field(default=None, max_length=32)
     buyer_email: str | None = Field(default=None, max_length=150)
+    buyer_siswa_id: int | None = None
 
     #: When present, replaces the whole Detail Transaksi set.
     lines: list[TaxInvoiceLineCreate] | None = Field(default=None, max_length=100)
@@ -191,6 +193,8 @@ class TaxInvoiceRead(BaseModel):
     electronic_signature_status: str
     signer_id: int | None
     signer_name: str | None
+
+    buyer_siswa_id: int | None
 
     is_advance_payment: bool
     is_settlement: bool

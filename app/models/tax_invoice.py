@@ -99,6 +99,13 @@ class TaxInvoice(TimestampMixin, table=True):
     buyer_idtku: str | None = Field(default=None, max_length=32)
     buyer_email: str | None = Field(default=None, max_length=150)
 
+    #: Optional classmate buyer (opsi A). When set, issuing this faktur creates
+    #: a prepopulated Pajak Masukan invoice owned by that student.
+    buyer_siswa_id: int | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True),
+    )
+
     # --- Totals, recomputed from the lines (BigInteger: an invoice sums many lines) ---
     total_price: int = Field(default=0, ge=0, sa_type=BigInteger)
     total_discount: int = Field(default=0, ge=0, sa_type=BigInteger)

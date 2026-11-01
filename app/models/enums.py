@@ -100,10 +100,22 @@ class SlipSptFlag(StrEnum):
 
 
 class TaxInputCreditStatus(StrEnum):
-    """Whether a Pajak Masukan invoice has been credited (dikreditkan)."""
+    """Whether a Pajak Masukan invoice has been credited (dikreditkan).
+
+    ``not_credited`` means Approved — no decision yet. ``uncredited`` is the
+    explicit "tidak dikreditkan" decision; ``credited`` is "dikreditkan".
+    """
 
     not_credited = "not_credited"
     credited = "credited"
+    uncredited = "uncredited"
+
+
+class TaxInputOrigin(StrEnum):
+    """How a Pajak Masukan invoice came to exist."""
+
+    prepopulated = "prepopulated"
+    manual = "manual"
 
 
 class TaxReturnType(StrEnum):
