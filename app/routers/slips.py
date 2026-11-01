@@ -215,6 +215,8 @@ def _validate_learning_fields(
         _fail("Fasilitas SKB wajib mencantumkan nomor dokumen SKB.")
 
     treaty_used = tarif_treaty_basis_points is not None
+    if treaty_used and not 0 <= tarif_treaty_basis_points <= 2000:
+        _fail("Tarif treaty harus 0–2000 basis poin (0–20%).")
     # Treaty only taxes non_final slips (_resolve_income_tax ignores it for
     # final), so a final slip carrying stray treaty fields is validated as if
     # no treaty applied — final mengabaikan treaty.
@@ -236,6 +238,15 @@ def _validate_learning_fields(
             _fail("Kategori TER harus A, B, atau C.")
         if tax_month == 12:
             _fail("TER hanya untuk Jan–Nov; Desember wajib progresif.")
+
+    if (
+        slip_type == SlipType.bp21
+        and tax_nature == SlipTaxNature.non_final
+        and tax_month is not None
+        and 1 <= tax_month <= 11
+        and (ter_category is None or str(ter_category).strip() == "")
+    ):
+        _fail("Pilih kategori TER (A/B/C) untuk Masa Jan–Nov.")
 
 #: Header aliases from the official converter (students may paste those names).
 #: Maps alias → internal field. Only the few students actually meet in class.
@@ -396,19 +407,26 @@ def _resolve_income_tax(
         and tax_month is not None
         and 1 <= tax_month <= 11
     ):
-        ter_tax = _calculate_ter_tax(gross_income, str(ter_category).strip().upper())
+        # Priority: official TER table (ter.py, seeded to Rp32,5jt) first;
+        # SIM_TER_RATES below is kept for compatibility and used only when
+        # the official table misses (unknown category/gross).
+        cat = str(ter_category).strip().upper()
+        official_rate = ter_service.lookup_rate(cat, gross_income)
+        if official_rate is not None:
+            return ter_service.monthly_tax(gross_income, official_rate), "ter"
+        ter_tax = _calculate_ter_tax(gross_income, cat)
         if ter_tax is not None:
             return ter_tax, "ter"
 
     if slip_type == SlipType.bpmp:
         # Monthly employee slip: TER rate x gross (PMK 168/2023 Art. 4).
-        # The PP 58/2023 rate table is not yet seeded, so while lookup misses
-        # the slip falls back to its explicit rate_percent — never a guess.
+        # Official table (ter.py) is the primary source while seeded;
+        # miss (unknown PTKP/gross) falls back to the explicit rate_percent.
         category = ter_service.ter_category_for_ptkp(ptkp_status)
         if category is not None:
             ter_rate = ter_service.lookup_rate(category, gross_income)
             if ter_rate is not None:
-                return ter_service.monthly_tax(gross_income, ter_rate)
+                return ter_service.monthly_tax(gross_income, ter_rate), "ter"
     if slip_type == SlipType.bp21 and tax_nature == SlipTaxNature.non_final:
         progressive_tax = _calculate_bp21_progressive_tax(
             session,
@@ -438,6 +456,20 @@ def _resolve_income_tax(
 
 
 # --- shared access / lifecycle helpers ---------------------------------------
+
+
+def _require_kode_otorisasi(kode_otorisasi: str | None) -> None:
+    """Kode Otorisasi simulasi wajib minimal 6 karakter untuk menerbitkan slip."""
+    if kode_otorisasi is None or str(kode_otorisasi).strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Kode Otorisasi wajib diisi minimal 6 karakter",
+        )
+    if len(str(kode_otorisasi).strip()) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Kode Otorisasi simulasi minimal 6 karakter",
+        )
 
 
 def slip_to_read(slip: WithholdingSlip) -> SlipRead:
@@ -509,6 +541,9 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     #: (read-only + account management only).
     _write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
     _review_roles = Depends(require_roles(Role.admin, Role.guru))
+    #: Siswa boleh membatalkan/menandai-tidak-valid dokumen MILIKNYA sendiri;
+    #: scoping pemilik tetap ditegakkan oleh _get_accessible_slip/can_read_slip.
+    _invalidate_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
 
     def _get_accessible_slip(
         slip_id: int, current_user: CurrentUser, session: SessionDep
@@ -937,6 +972,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         data: SlipBulkIssue, current_user: CurrentUser, session: SessionDep
     ) -> SlipBulkIssueResult:
         """Bulk Process → Diterbitkan Masa Pajak: issue many drafts at once."""
+        _require_kode_otorisasi(data.kode_otorisasi)
         results: list[SlipImportRowResult] = []
         for slip_id in data.ids:
             slip = session.get(WithholdingSlip, slip_id)
@@ -1111,12 +1147,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         signer_name = (
             (data.signer_name if data and data.signer_name else None) or current_user.full_name
         )
-        if data and data.kode_otorisasi is not None and str(data.kode_otorisasi).strip() != "":
-            if len(str(data.kode_otorisasi).strip()) < 6:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Kode Otorisasi simulasi minimal 6 karakter",
-                )
+        _require_kode_otorisasi(data.kode_otorisasi if data else None)
         issue_slip(slip, label, signer_id=current_user.id, signer_name=signer_name)
         session.add(slip)
         log_action(
@@ -1162,7 +1193,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         session.refresh(slip)
         return slip_to_read(slip)
 
-    @router.post("/{slip_id}/invalidate", response_model=SlipRead, dependencies=[_review_roles])
+    @router.post("/{slip_id}/invalidate", response_model=SlipRead, dependencies=[_invalidate_roles])
     def invalidate(
         slip_id: int, data: SlipInvalidate, current_user: CurrentUser, session: SessionDep
     ) -> SlipRead:

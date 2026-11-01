@@ -20,7 +20,7 @@ def _first_class_id(client: TestClient, headers: dict[str, str]) -> int:
 def _bp21_payload(class_id: int) -> dict:
     return {
         "class_id": class_id,
-        "tax_month": 7,
+        "tax_month": 12,
         "tax_year": 2026,
         "withholder_npwp": "1471110802000001",
         "withholder_name": "PT Simulasi Pajak Nusantara",
@@ -40,7 +40,7 @@ def _bp21_payload(class_id: int) -> dict:
         "kap_kjs": "411121-100",
         "document_type": "Invoice",
         "document_number": "INV/2026/001",
-        "document_date": "2026-07-01",
+        "document_date": "2026-12-01",
         "document_nitku": "1471110802000001000001",
     }
 
@@ -56,11 +56,11 @@ def test_siswa_can_create_and_issue_bp21(client: TestClient) -> None:
     assert body["income_tax"] == 250_000
     assert body["withholding_number"] is None
 
-    issued = client.post(f"/api/v1/bp21/{body['id']}/issue", headers=headers)
+    issued = client.post(f"/api/v1/bp21/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
     assert issued.status_code == 200
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
-    assert issued_body["withholding_number"].startswith("SIM-BP21-202607-")
+    assert issued_body["withholding_number"].startswith("SIM-BP21-202612-")
     assert issued_body["electronic_signature_status"] == "signed"
 
 
@@ -119,7 +119,7 @@ def test_bp21_update_recalculates_progressive_tax(client: TestClient) -> None:
     assert updated.json()["income_tax"] == 325_000
 
 
-def test_siswa_cannot_invalidate_bp21(client: TestClient) -> None:
+def test_siswa_can_invalidate_own_bp21(client: TestClient) -> None:
     headers = auth_headers(client, SISWA_A)
     class_id = _first_class_id(client, headers)
     created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
@@ -129,7 +129,82 @@ def test_siswa_cannot_invalidate_bp21(client: TestClient) -> None:
         headers=headers,
         json={"invalid_reason": "Data tidak sesuai"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "invalid"
+
+
+def test_siswa_cannot_invalidate_other_tenant_bp21(client: TestClient) -> None:
+    siswa_headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, siswa_headers)
+    created = client.post(
+        "/api/v1/bp21", headers=siswa_headers, json=_bp21_payload(class_id)
+    ).json()
+
+    other_admin_headers = auth_headers(client, ADMIN_B)
+    resp = client.post(
+        f"/api/v1/bp21/{created['id']}/invalidate",
+        headers=other_admin_headers,
+        json={"invalid_reason": "Coba ganggu"},
+    )
+    assert resp.status_code in (403, 404)
+
+
+def test_siswa_can_cancel_own_issued_bp21(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+    issued = client.post(
+        f"/api/v1/bp21/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
+    assert issued.status_code == 200
+
+    cancelled = client.post(
+        f"/api/v1/bp21/{created['id']}/cancel",
+        headers=headers,
+        json={"reason": "Salah input"},
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "invalid"
+
+
+def test_bp21_issue_requires_kode_otorisasi(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
+
+    missing = client.post(f"/api/v1/bp21/{created['id']}/issue", headers=headers)
+    assert missing.status_code == 422
+    assert "Kode Otorisasi" in missing.json()["detail"]
+
+    empty = client.post(
+        f"/api/v1/bp21/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": ""},
+    )
+    assert empty.status_code == 422
+
+    ok = client.post(
+        f"/api/v1/bp21/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["calculation_method"] is not None
+
+
+def test_bp21_non_final_jan_nov_without_ter_rejected(client: TestClient) -> None:
+    headers = auth_headers(client, SISWA_A)
+    class_id = _first_class_id(client, headers)
+    payload = _bp21_payload(class_id)
+    payload["tax_month"] = 7
+    payload.pop("ter_category", None)
+
+    created = client.post("/api/v1/bp21", headers=headers, json=payload)
+
+    assert created.status_code == 422
+    assert "TER" in created.json()["detail"]
 
 
 def test_other_tenant_admin_cannot_see_bp21(client: TestClient) -> None:
@@ -178,7 +253,8 @@ def test_bp21_ter_jan_nov_uses_sim_ter(client: TestClient) -> None:
 
     assert created.status_code == 201
     body = created.json()
-    assert body["income_tax"] == 80_000
+    # Official TER table hit: A, 8jt → 125bp → 100.000 (SIM fallback 80.000).
+    assert body["income_tax"] == 100_000
     assert body["calculation_method"] == "ter"
     assert body["ter_category"] == "A"
 
@@ -252,7 +328,7 @@ def test_bp21_summary_counts_created_statuses_and_respects_tenant(client: TestCl
 
     client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id))
     issued = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
-    client.post(f"/api/v1/bp21/{issued['id']}/issue", headers=headers)
+    client.post(f"/api/v1/bp21/{issued['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
 
     after = client.get("/api/v1/bp21/summary", headers=headers).json()
     other_after = client.get("/api/v1/bp21/summary", headers=other_headers).json()

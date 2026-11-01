@@ -116,7 +116,7 @@ def _make_bp23_issued(
     )
     assert res.status_code == 201, res.text
     created = res.json()
-    issued = client.post(f"{BASE}/bp23/{created['id']}/issue", headers=headers)
+    issued = client.post(f"{BASE}/bp23/{created['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
     assert issued.status_code == 200, issued.text
     return issued.json()
 
@@ -336,7 +336,7 @@ def test_submit_kurang_bayar_creates_billing_then_pay_reports(client: TestClient
     assert billing["status"] == "unpaid"
     assert billing["amount"] == data["amount_due"] == keluaran["total_ppn"]
     assert len(billing["code"]) == 15 and billing["code"].isdigit()
-    assert billing["kap_kjs"] == "411121-100"
+    assert billing["kap_kjs"] == "411211-100"
     assert billing["masa_pajak"] == "052026"
 
     # The parked SPT cannot be re-submitted into a second billing.

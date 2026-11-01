@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import SlipSptFlag, SlipStatus, SlipTaxFacility, SlipTaxNature
 
@@ -47,12 +47,26 @@ class SlipBase(BaseModel):
     negara_treaty: str | None = Field(default=None, max_length=5)
     pasal_treaty: str | None = Field(default=None, max_length=20)
     nomor_skd: str | None = Field(default=None, max_length=100)
-    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=10000)
+    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=2000)
 
     document_type: str | None = Field(default=None, max_length=60)
     document_number: str | None = Field(default=None, max_length=60)
     document_date: date | None = Field(default=None)
     document_nitku: str | None = Field(default=None, max_length=32)
+
+    @field_validator("tarif_treaty_basis_points", mode="before")
+    @classmethod
+    def _check_treaty_cap(cls, v: object) -> object:
+        """P3B treaty rates cap at 20% — reject outside 0–2000bp in Indonesian."""
+        if v is None:
+            return v
+        try:
+            num = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return v
+        if not 0 <= num <= 2000:
+            raise ValueError("Tarif treaty harus 0–2000 basis poin (0–20%).")
+        return v
 
 
 class SlipCreate(SlipBase):
@@ -96,12 +110,26 @@ class SlipUpdate(BaseModel):
     negara_treaty: str | None = Field(default=None, max_length=5)
     pasal_treaty: str | None = Field(default=None, max_length=20)
     nomor_skd: str | None = Field(default=None, max_length=100)
-    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=10000)
+    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=2000)
 
     document_type: str | None = Field(default=None, max_length=60)
     document_number: str | None = Field(default=None, max_length=60)
     document_date: date | None = Field(default=None)
     document_nitku: str | None = Field(default=None, max_length=32)
+
+    @field_validator("tarif_treaty_basis_points", mode="before")
+    @classmethod
+    def _check_treaty_cap(cls, v: object) -> object:
+        """P3B treaty rates cap at 20% — reject outside 0–2000bp in Indonesian."""
+        if v is None:
+            return v
+        try:
+            num = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return v
+        if not 0 <= num <= 2000:
+            raise ValueError("Tarif treaty harus 0–2000 basis poin (0–20%).")
+        return v
 
 
 class SlipReview(BaseModel):
@@ -134,6 +162,7 @@ class SlipSptFlagUpdate(BaseModel):
 
 class SlipBulkIssue(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=200)
+    kode_otorisasi: str | None = Field(default=None, max_length=100)
 
 
 class SlipRead(BaseModel):

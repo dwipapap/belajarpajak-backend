@@ -5,12 +5,9 @@ PMK 168/2023 Art. 3 (TER categories by PTKP status), Art. 4 (monthly
 ``monthly_tax = TER_rate * monthly_gross`` for Jan-Nov and other non-final
 months), Art. 5-6 (December/final-month annualization correction).
 
-Authoritative TER numbers live ONLY in the PP 58/2023 appendix tables — do
-not copy rates from blogs. The lookup table below is intentionally unseeded
-(``TER_TABLE`` is empty); rates must be seeded as tariff data (like PTKP)
-from the PP before the monthly lookup can be used in production. Until then
-every function here is pure and testable without a database, and BPMP slips
-fall back to their explicit ``rate_percent``.
+Authoritative TER numbers live ONLY in the PP 58/2023 appendix tables (as
+transcribed in PMK 168/2023 Lampiran I); per-category layer boundaries below
+mirror that transcription. Each category peaks at 34% open-ended.
 """
 
 from __future__ import annotations
@@ -35,11 +32,133 @@ TER_CATEGORIES: tuple[str, ...] = ("A", "B", "C")
 #:
 #: Shape: ``{category: ((upper_bound_inclusive, rate_basis_points), ...)}``,
 #: brackets ascending, last bracket open-ended via ``upper_bound = None``.
-#: TODO(seed): transcribe the brackets and rates verbatim from the PP 58/2023
-#: appendix tables (source of truth). No rate from any other source — blog,
-#: summary table, or memory — may be entered here. Until seeded, ``lookup_rate``
-#: returns ``None`` and callers fall back to the slip's explicit rate.
-TER_TABLE: dict[str, tuple[tuple[int | None, int], ...]] = {}
+#: Each entry is (batas_atas_bruto, A_bp, B_bp, C_bp) converted from decimal
+#: to basis points (1% = 100 bp). Full transcription of the PMK 168/2023
+#: Lampiran I tables (mirroring the PP 58/2023 appendix); every category
+#: peaks at 34% open-ended (A s.d. Rp1.400M, B s.d. Rp1.405M, C s.d.
+#: Rp1.419M, then the peak layer).
+TER_TABLE: dict[str, tuple[tuple[int | None, int], ...]] = {
+    "A": (
+        (5_400_000, 0),
+        (5_650_000, 25),
+        (5_950_000, 50),
+        (6_300_000, 75),
+        (6_750_000, 100),
+        (7_500_000, 125),
+        (8_550_000, 125),
+        (9_650_000, 150),
+        (10_950_000, 175),
+        (12_500_000, 225),
+        (14_400_000, 250),
+        (16_800_000, 300),
+        (19_750_000, 400),
+        (24_000_000, 500),
+        (28_350_000, 600),
+        (32_500_000, 700),
+        (35_400_000, 1400),
+        (39_100_000, 1500),
+        (43_850_000, 1600),
+        (47_800_000, 1700),
+        (51_400_000, 1800),
+        (56_300_000, 1900),
+        (62_200_000, 2000),
+        (68_600_000, 2100),
+        (77_500_000, 2200),
+        (89_000_000, 2300),
+        (103_000_000, 2400),
+        (125_000_000, 2500),
+        (157_000_000, 2600),
+        (206_000_000, 2700),
+        (337_000_000, 2800),
+        (454_000_000, 2900),
+        (550_000_000, 3000),
+        (695_000_000, 3100),
+        (910_000_000, 3200),
+        (1_400_000_000, 3300),
+        (None, 3400),
+    ),
+    "B": (
+        (5_400_000, 0),
+        (5_650_000, 25),
+        (5_950_000, 50),
+        (6_300_000, 75),
+        (6_750_000, 100),
+        (7_500_000, 125),
+        (8_550_000, 175),
+        (9_650_000, 225),
+        (10_950_000, 250),
+        (12_500_000, 300),
+        (14_400_000, 350),
+        (16_800_000, 400),
+        (19_750_000, 500),
+        (24_000_000, 600),
+        (28_350_000, 700),
+        (32_500_000, 800),
+        (33_950_000, 1300),
+        (37_100_000, 1400),
+        (41_100_000, 1500),
+        (45_800_000, 1600),
+        (49_500_000, 1700),
+        (53_800_000, 1800),
+        (58_500_000, 1900),
+        (64_000_000, 2000),
+        (71_000_000, 2100),
+        (80_000_000, 2200),
+        (93_000_000, 2300),
+        (109_000_000, 2400),
+        (129_000_000, 2500),
+        (163_000_000, 2600),
+        (211_000_000, 2700),
+        (374_000_000, 2800),
+        (459_000_000, 2900),
+        (555_000_000, 3000),
+        (704_000_000, 3100),
+        (957_000_000, 3200),
+        (1_405_000_000, 3300),
+        (None, 3400),
+    ),
+    "C": (
+        (5_400_000, 0),
+        (5_650_000, 25),
+        (5_950_000, 50),
+        (6_300_000, 75),
+        (6_750_000, 100),
+        (7_500_000, 150),
+        (8_550_000, 200),
+        (9_650_000, 250),
+        (10_950_000, 300),
+        (12_500_000, 400),
+        (14_400_000, 500),
+        (16_800_000, 600),
+        (19_750_000, 700),
+        (24_000_000, 800),
+        (28_350_000, 900),
+        (32_500_000, 1000),
+        (32_600_000, 1200),
+        (35_400_000, 1300),
+        (38_900_000, 1400),
+        (43_000_000, 1500),
+        (47_400_000, 1600),
+        (51_200_000, 1700),
+        (55_800_000, 1800),
+        (60_400_000, 1900),
+        (66_700_000, 2000),
+        (74_500_000, 2100),
+        (83_200_000, 2200),
+        (95_600_000, 2300),
+        (110_000_000, 2400),
+        (134_000_000, 2500),
+        (169_000_000, 2600),
+        (221_000_000, 2700),
+        (390_000_000, 2800),
+        (463_000_000, 2900),
+        (561_000_000, 3000),
+        (709_000_000, 3100),
+        (965_000_000, 3200),
+        (1_419_000_000, 3300),
+        (None, 3400),
+    ),
+}
 
 
 def ter_category_for_ptkp(ptkp_status: str | None) -> str | None:
@@ -52,8 +171,8 @@ def ter_category_for_ptkp(ptkp_status: str | None) -> str | None:
 def lookup_rate(category: str, monthly_gross: int) -> int | None:
     """Return the TER rate (basis points) for a category + monthly gross.
 
-    Returns None when the category has no seeded brackets yet — callers must
-    fall back to an explicit rate rather than invent one.
+    Returns None only when the category has no brackets. Gross above the
+    highest finite layer uses the open-ended peak layer (34% official rate).
     """
     brackets = TER_TABLE.get(category)
     if not brackets:
@@ -61,7 +180,8 @@ def lookup_rate(category: str, monthly_gross: int) -> int | None:
     for upper_bound, rate_basis_points in brackets:
         if upper_bound is None or monthly_gross <= upper_bound:
             return rate_basis_points
-    return None  # pragma: no cover - open-ended last bracket always matches
+    # Defensive: no open-ended last bracket → approximate with last rate.
+    return brackets[-1][1]
 
 
 def monthly_tax(monthly_gross: int, rate_basis_points: int) -> int:

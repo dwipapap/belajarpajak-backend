@@ -20,7 +20,7 @@ def _first_class_id(client: TestClient, headers: dict[str, str]) -> int:
 
 
 def _bpmp_payload(class_id: int, *, month: int = 4, year: int = 2025) -> dict:
-    """Monthly permanent-employee slip; TER table unseeded so explicit rate applies."""
+    """Monthly permanent-employee slip; official TER table hit → ter tax."""
     return {
         "class_id": class_id,
         "tax_month": month,
@@ -49,7 +49,7 @@ def _issue_two_months(client: TestClient, headers: dict[str, str], class_id: int
             f"{BASE}/bpmp", headers=headers, json=_bpmp_payload(class_id, month=month)
         )
         assert created.status_code == 201, created.text
-        issued = client.post(f"{BASE}/bpmp/{created.json()['id']}/issue", headers=headers)
+        issued = client.post(f"{BASE}/bpmp/{created.json()['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
         assert issued.status_code == 200, issued.text
 
 
@@ -61,11 +61,11 @@ def test_siswa_can_create_and_issue_bpmp_with_explicit_rate(client: TestClient) 
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["status"] == "draft"
-    # TER table unseeded → falls back to dpp x explicit rate_percent.
-    assert body["income_tax"] == 500_000
+    # Official TER table hit: TK/0 → A, 10jt → 175bp → 175.000.
+    assert body["income_tax"] == 175_000
     assert body["withholding_number"] is None
 
-    issued = client.post(f"{BASE}/bpmp/{body['id']}/issue", headers=headers)
+    issued = client.post(f"{BASE}/bpmp/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
     assert issued.status_code == 200, issued.text
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
@@ -111,7 +111,7 @@ def test_a1_and_a2_aggregate_issued_monthly_slips(client: TestClient) -> None:
         item = next(x for x in body["items"] if x["recipient_identity_number"] == IDENTITY)
         assert item["form"] == form.upper()
         assert item["annual_gross"] >= 20_000_000
-        assert item["annual_tax"] >= 1_000_000
+        assert item["annual_tax"] >= 350_000
         assert {3, 4} <= set(item["months_covered"])
         assert item["ter_category"] == "A"
 
@@ -120,7 +120,7 @@ def test_a1_and_a2_aggregate_issued_monthly_slips(client: TestClient) -> None:
         rows = detail.json()["rows"]
         assert len(rows) >= 2
         assert {row["tax_month"] for row in rows} >= {3, 4}
-        assert sum(row["income_tax"] for row in rows) >= 1_000_000
+        assert sum(row["income_tax"] for row in rows) >= 350_000
 
 
 def test_a1_detail_404_for_unknown_identity(client: TestClient) -> None:
@@ -140,7 +140,7 @@ def test_pph_21_26_posting_aggregates_bpmp(client: TestClient) -> None:
 
     created = client.post(f"{BASE}/bpmp", headers=headers, json=_bpmp_payload(class_id))
     assert created.status_code == 201, created.text
-    issued = client.post(f"{BASE}/bpmp/{created.json()['id']}/issue", headers=headers)
+    issued = client.post(f"{BASE}/bpmp/{created.json()['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
     assert issued.status_code == 200, issued.text
 
     spt = client.post(
@@ -170,9 +170,9 @@ def test_pph_21_26_posting_aggregates_bpmp(client: TestClient) -> None:
     posted = client.post(f"{BASE}/spt/{spt_id}/posting", headers=headers)
     assert posted.status_code == 200, posted.text
     body = posted.json()
-    assert body["total_income_tax"] >= 500_000
+    assert body["total_income_tax"] >= 175_000
     assert body["amount_due"] == body["total_income_tax"]
     kjs_row = next(
         x for x in body["lines"] if x["section"] == "pasal_21" and x["code"] == "411121-100"
     )
-    assert kjs_row["pemotongan"] >= 500_000
+    assert kjs_row["pemotongan"] >= 175_000

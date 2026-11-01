@@ -101,7 +101,7 @@ class WithholdingSlip(TimestampMixin, table=True):
     negara_treaty: str | None = Field(default=None, max_length=5)
     pasal_treaty: str | None = Field(default=None, max_length=20)
     nomor_skd: str | None = Field(default=None, max_length=100)
-    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=10000)
+    tarif_treaty_basis_points: int | None = Field(default=None, ge=0, le=2000)
 
     document_type: str | None = Field(default=None, max_length=60)
     document_number: str | None = Field(default=None, max_length=60)
