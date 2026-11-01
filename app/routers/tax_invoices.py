@@ -34,6 +34,7 @@ from app.schemas.tax_invoice import (
     TaxInvoiceBulkIssueResult,
     TaxInvoiceCancel,
     TaxInvoiceCreate,
+    TaxInvoiceIssue,
     TaxInvoiceLineCreate,
     TaxInvoiceLineRead,
     TaxInvoiceLineUpdate,
@@ -44,6 +45,7 @@ from app.schemas.tax_invoice import (
     TaxInvoiceUpdate,
 )
 from app.services.audit import log_action
+from app.services.signing import require_kode_otorisasi
 
 LABEL = "Faktur Pajak Keluaran"
 MAX_EXPORT_ROWS = 5_000
@@ -331,11 +333,21 @@ def _validate_identity(
             )
 
 
-def issue_invoice(session: Session, invoice: TaxInvoice) -> None:
+def issue_invoice(
+    session: Session,
+    invoice: TaxInvoice,
+    *,
+    signer_id: int | None,
+    signer_name: str | None,
+) -> None:
     invoice.status = TaxInvoiceStatus.issued
     invoice.issued_at = datetime.now(UTC)
     invoice.electronic_signature_status = "signed"
     invoice.invoice_number = generate_invoice_number(session, invoice)
+    if signer_id is not None:
+        invoice.signer_id = signer_id
+    if signer_name:
+        invoice.signer_name = signer_name
 
 
 def _replace_lines(
@@ -610,7 +622,10 @@ def bulk_issue(
     non-draft, a draft without lines, or a numbering conflict only marks that
     item as failed while the rest still go through. The session is rolled back
     after any per-item error so a bad row can never poison the remainder.
+    A missing or short Kode Otorisasi rejects the whole request with 422.
     """
+    require_kode_otorisasi(data.kode_otorisasi)
+    signer_name = data.signer_name or current_user.full_name
     result = TaxInvoiceBulkIssueResult()
     for invoice_id in data.ids:
         try:
@@ -627,7 +642,9 @@ def bulk_issue(
                 result.skipped += 1
                 result.errors.append(f"#{invoice_id}: belum ada detail transaksi")
                 continue
-            issue_invoice(session, invoice)
+            issue_invoice(
+                session, invoice, signer_id=current_user.id, signer_name=signer_name
+            )
             session.add(invoice)
             session.commit()
             result.issued += 1
@@ -705,7 +722,12 @@ def delete_invoice(invoice_id: int, current_user: CurrentUser, session: SessionD
 
 
 @router.post("/{invoice_id}/issue", response_model=TaxInvoiceRead, dependencies=[_write_roles])
-def issue(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> TaxInvoiceRead:
+def issue(
+    invoice_id: int,
+    data: TaxInvoiceIssue,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> TaxInvoiceRead:
     """Upload Faktur — assigns the Nomor Faktur and moves the draft to Telah Terbit."""
     invoice = _get_accessible_invoice(invoice_id, current_user, session)
     _require_draft(invoice, "diterbitkan")
@@ -714,7 +736,9 @@ def issue(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> Ta
             status_code=status.HTTP_409_CONFLICT,
             detail=f"{LABEL} belum memiliki detail transaksi",
         )
-    issue_invoice(session, invoice)
+    require_kode_otorisasi(data.kode_otorisasi)
+    signer_name = data.signer_name or current_user.full_name
+    issue_invoice(session, invoice, signer_id=current_user.id, signer_name=signer_name)
     session.add(invoice)
     try:
         session.commit()

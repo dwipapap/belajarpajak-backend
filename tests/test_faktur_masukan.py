@@ -242,7 +242,11 @@ def test_source_invoice_copy(client: TestClient):
     )
     assert keluaran.status_code == 201
     kid = keluaran.json()["id"]
-    issued = client.post(f"/api/v1/faktur-keluaran/{kid}/issue", headers=siswa_headers)
+    issued = client.post(
+        f"/api/v1/faktur-keluaran/{kid}/issue",
+        json={"kode_otorisasi": "123456"},
+        headers=siswa_headers,
+    )
     assert issued.status_code == 200
     source_number = issued.json()["invoice_number"]
     assert source_number is not None

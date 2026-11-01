@@ -68,7 +68,11 @@ def _make_keluaran_issued(
     )
     assert res.status_code == 201, res.text
     created = res.json()
-    issued = client.post(f"{BASE}/faktur-keluaran/{created['id']}/issue", headers=headers)
+    issued = client.post(
+        f"{BASE}/faktur-keluaran/{created['id']}/issue",
+        json={"kode_otorisasi": "123456"},
+        headers=headers,
+    )
     assert issued.status_code == 200, issued.text
     return issued.json()
 
