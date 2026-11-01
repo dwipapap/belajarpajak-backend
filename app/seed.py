@@ -131,12 +131,14 @@ def seed(session: Session) -> list[dict]:
     for spec in TENANTS:
         tenant = session.exec(select(Tenant).where(Tenant.slug == spec["slug"])).first()
         if tenant is None:
+            today = date.today()
             tenant = Tenant(
                 name=spec["name"],
                 slug=spec["slug"],
                 type=spec["type"],
                 contact_wa=spec.get("contact_wa"),
-                berlaku_sampai=date(date.today().year + 1, date.today().month, date.today().day),
+                berlaku_dari=today,
+                berlaku_sampai=date(today.year + 1, today.month, today.day),
                 max_guru=spec.get("max_guru"),
                 max_siswa=spec.get("max_siswa"),
                 max_kelas=spec.get("max_kelas"),

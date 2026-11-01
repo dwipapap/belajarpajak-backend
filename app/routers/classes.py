@@ -24,6 +24,9 @@ from app.services.audit import log_action
 router = APIRouter(prefix="/classes", tags=["classes"])
 
 _admin_guru_siswa = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
+# Read endpoints are also visible to the superadmin (cross-tenant, read-only).
+# Write endpoints (create/enroll/unenroll/archive) stay admin-only.
+_read_roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.siswa))
 _admin_guru = Depends(require_roles(Role.admin, Role.guru))
 _admin_only = Depends(require_roles(Role.admin))
 
@@ -37,10 +40,12 @@ def _enrolled_students(session: SessionDep, class_id: int) -> list[User]:
     ).all()
 
 
-@router.get("", response_model=list[ClassRead], dependencies=[_admin_guru_siswa])
+@router.get("", response_model=list[ClassRead], dependencies=[_read_roles])
 def list_classes(current_user: CurrentUser, session: SessionDep) -> list[ClassRead]:
-    """Admin: all classes in tenant. Guru: own classes. Siswa: enrolled classes."""
-    query = select(SchoolClass).where(SchoolClass.tenant_id == current_user.tenant_id)
+    """Admin: all classes in tenant. Guru: own classes. Siswa: enrolled classes. Superadmin: all classes cross-tenant (read-only)."""
+    query = select(SchoolClass)
+    if current_user.role != Role.superadmin:
+        query = query.where(SchoolClass.tenant_id == current_user.tenant_id)
     if current_user.role == Role.guru:
         query = query.where(SchoolClass.guru_id == current_user.id)
     elif current_user.role == Role.siswa:
@@ -225,11 +230,15 @@ def set_class_archived(
     return school_class
 
 
-@router.get("/{class_id}", response_model=ClassDetail, dependencies=[_admin_guru_siswa])
+@router.get("/{class_id}", response_model=ClassDetail, dependencies=[_read_roles])
 def get_class(class_id: int, current_user: CurrentUser, session: SessionDep) -> ClassDetail:
     school_class = session.get(SchoolClass, class_id)
-    # Everyone is tenant-scoped here; class browsing is institution-local.
-    if school_class is None or school_class.tenant_id != current_user.tenant_id:
+    # Superadmin reads cross-tenant; everyone else is tenant-scoped here.
+    if school_class is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kelas tidak ditemukan")
+    if current_user.role == Role.superadmin:
+        return _build_class_detail(session, school_class)
+    if school_class.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kelas tidak ditemukan")
 
     if current_user.role == Role.guru and school_class.guru_id != current_user.id:

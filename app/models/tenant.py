@@ -25,6 +25,10 @@ class Tenant(TimestampMixin, table=True):
 
     #: WhatsApp contact of the institution PIC.
     contact_wa: str | None = Field(default=None, max_length=20)
+    #: Instance validity start date — set at creation; kept as-is on extend
+    #: unless the period already expired, in which case a new period starts.
+    #: NULL for legacy rows created before this column existed.
+    berlaku_dari: date | None = Field(default=None, sa_column=Column(Date(), nullable=True))
     #: Instance validity end date — superadmin sets it (usually via a duration
     #: in months). Expiry only surfaces as a warning; blocking is deactivation.
     berlaku_sampai: date | None = Field(default=None, sa_column=Column(Date(), nullable=True))

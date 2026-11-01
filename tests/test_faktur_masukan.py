@@ -185,14 +185,34 @@ def test_guru_can_review_but_siswa_cannot(client: TestClient):
     assert denied.status_code == 403
 
 
-def test_guru_cannot_credit(client: TestClient):
+def test_guru_can_credit_and_uncredit_own_class_invoice(client: TestClient):
     siswa_headers = auth_headers(client, SISWA)
     class_id = client.get("/api/v1/classes", headers=siswa_headers).json()[0]["id"]
     created = _create(client, siswa_headers, class_id=class_id)
 
     guru_headers = auth_headers(client, GURU)
     res = client.post(f"/api/v1/faktur-masukan/{created['id']}/credit", headers=guru_headers)
-    assert res.status_code == 403
+    assert res.status_code == 200, res.text
+    assert res.json()["credit_status"] == "credited"
+
+    uncredit = client.post(f"/api/v1/faktur-masukan/{created['id']}/uncredit", headers=guru_headers)
+    assert uncredit.status_code == 200, uncredit.text
+    assert uncredit.json()["credit_status"] == "not_credited"
+
+
+def test_guru_bulk_credit_own_class_invoice(client: TestClient):
+    siswa_headers = auth_headers(client, SISWA)
+    class_id = client.get("/api/v1/classes", headers=siswa_headers).json()[0]["id"]
+    a = _create(client, siswa_headers, class_id=class_id)
+
+    guru_headers = auth_headers(client, GURU)
+    res = client.post("/api/v1/faktur-masukan/bulk-credit", json={"ids": [a["id"]]}, headers=guru_headers)
+    assert res.status_code == 200, res.text
+    assert res.json()["credited"] == 1
+
+    res2 = client.post("/api/v1/faktur-masukan/bulk-uncredit", json={"ids": [a["id"]]}, headers=guru_headers)
+    assert res2.status_code == 200, res2.text
+    assert res2.json()["uncredited"] == 1
 
 
 def test_summary_counts(client: TestClient):

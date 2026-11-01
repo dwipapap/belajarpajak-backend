@@ -12,7 +12,7 @@ from datetime import date
 from json import dumps, loads
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlmodel import select
+from sqlmodel import func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.security import hash_password
@@ -26,8 +26,11 @@ from app.models.user import User
 from app.schemas.tenant import (
     TenantCreate,
     TenantDeleteConfirm,
+    TenantQuotaUsage,
     TenantRead,
     TenantStatusUpdate,
+    TenantSummary,
+    TenantSummaryAdmin,
     TenantUpdate,
 )
 from app.services.audit import log_action
@@ -37,15 +40,23 @@ router = APIRouter(prefix="/tenants", tags=["tenants"])
 _superadmin = Depends(require_roles(Role.superadmin))
 
 
-def _compute_validity(months: int) -> date:
-    today = date.today()
-    month = today.month - 1 + months
-    year = today.year + month // 12
+def _month_length(year: int, month: int) -> int:
+    if month == 2:
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        return 29 if leap else 28
+    return [31, 0, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+
+
+def _add_months(base: date, months: int) -> date:
+    month = base.month - 1 + months
+    year = base.year + month // 12
     month = month % 12 + 1
     # Clamp the day to the month length (28..31).
-    day = min(today.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
-                          31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
-    return date(year, month, day)
+    return date(year, month, min(base.day, _month_length(year, month)))
+
+
+def _compute_validity(months: int, base: date | None = None) -> date:
+    return _add_months(base or date.today(), months)
 
 
 def _require_slug(session: SessionDep, slug: str, exclude_id: int | None = None) -> None:
@@ -83,7 +94,8 @@ def create_tenant(data: TenantCreate, session: SessionDep, current_user: Current
         slug=data.slug,
         type=data.type,
         contact_wa=data.contact_wa,
-        berlaku_sampai=_compute_validity(data.masa_berlaku_bulan),
+        berlaku_dari=(today := date.today()),
+        berlaku_sampai=_compute_validity(data.masa_berlaku_bulan, today),
         max_guru=data.max_guru,
         max_siswa=data.max_siswa,
         max_kelas=data.max_kelas,
@@ -124,9 +136,44 @@ def update_tenant(tenant_id: int, data: TenantUpdate, session: SessionDep) -> Te
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant tidak ditemukan")
 
     payload = data.model_dump(exclude_unset=True)
+    if "slug" in payload:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Slug instansi tidak dapat diubah",
+        )
     months = payload.pop("masa_berlaku_bulan", None)
-    if months is not None:
-        tenant.berlaku_sampai = _compute_validity(months)
+    explicit_dari = payload.pop("berlaku_dari", None)
+    explicit_sampai = payload.pop("berlaku_sampai", None)
+    has_explicit = "berlaku_dari" in data.model_fields_set or "berlaku_sampai" in data.model_fields_set
+    # Pydantic already parsed YYYY-MM-DD into ``date``; unset fields are absent.
+    if has_explicit:
+        eff_dari = explicit_dari if explicit_dari is not None else tenant.berlaku_dari
+        eff_sampai = explicit_sampai if explicit_sampai is not None else tenant.berlaku_sampai
+        if eff_dari is not None and eff_sampai is not None and eff_dari > eff_sampai:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Tanggal mulai tidak boleh setelah tanggal berakhir",
+            )
+        if eff_sampai is not None and eff_sampai < date.today():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Tanggal berakhir tidak boleh sebelum hari ini — gunakan Nonaktifkan bila ingin memblokir",
+            )
+        # Explicit dates win: ignore masa_berlaku_bulan entirely.
+        if explicit_dari is not None:
+            tenant.berlaku_dari = explicit_dari
+        if explicit_sampai is not None:
+            tenant.berlaku_sampai = explicit_sampai
+    elif months is not None:
+        today = date.today()
+        old_sampai = tenant.berlaku_sampai
+        if old_sampai is None or old_sampai < today:
+            # Expired (or never set): start a fresh period from today.
+            tenant.berlaku_dari = today
+            tenant.berlaku_sampai = _compute_validity(months, today)
+        else:
+            # Early extend: preserve the remaining period.
+            tenant.berlaku_sampai = _compute_validity(months, old_sampai)
     for field, value in payload.items():
         setattr(tenant, field, value)
     session.add(tenant)
@@ -190,6 +237,73 @@ def activate_tenant(
     session.commit()
     session.refresh(tenant)
     return tenant
+
+
+@router.get("/{tenant_id}/summary", response_model=TenantSummary, dependencies=[_superadmin])
+def tenant_summary(tenant_id: int, session: SessionDep) -> TenantSummary:
+    """Dossier ringkasan pemakaian instansi untuk superadmin."""
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant tidak ditemukan")
+
+    def _count_users(role: Role) -> int:
+        return session.exec(
+            select(func.count())
+            .select_from(User)
+            .where(User.tenant_id == tenant_id, User.role == role)
+        ).one()
+
+    guru_used = _count_users(Role.guru)
+    siswa_used = _count_users(Role.siswa)
+    kelas_used = session.exec(
+        select(func.count())
+        .select_from(SchoolClass)
+        .where(SchoolClass.tenant_id == tenant_id)
+    ).one()
+
+    def _usage(used: int, limit: int | None) -> TenantQuotaUsage:
+        return TenantQuotaUsage(
+            used=used, limit=limit, full=limit is not None and used >= limit
+        )
+
+    admin_user = session.exec(
+        select(User).where(User.tenant_id == tenant_id, User.role == Role.admin)
+    ).first()
+    admin = (
+        TenantSummaryAdmin(
+            id=admin_user.id,
+            full_name=admin_user.full_name,
+            email=admin_user.email,
+            is_active=admin_user.is_active,
+        )
+        if admin_user is not None
+        else None
+    )
+
+    days_remaining: int | None = None
+    expired = False
+    expired_soon = False
+    if tenant.berlaku_sampai is not None:
+        days_remaining = (tenant.berlaku_sampai - date.today()).days
+        expired = tenant.berlaku_sampai < date.today()
+        expired_soon = days_remaining <= 30
+
+    return TenantSummary(
+        tenant_id=tenant.id,
+        name=tenant.name,
+        slug=tenant.slug,
+        type=tenant.type,
+        is_active=tenant.is_active,
+        berlaku_dari=tenant.berlaku_dari,
+        berlaku_sampai=tenant.berlaku_sampai,
+        days_remaining=days_remaining,
+        expired=expired,
+        expired_soon=expired_soon,
+        guru=_usage(guru_used, tenant.max_guru),
+        siswa=_usage(siswa_used, tenant.max_siswa),
+        kelas=_usage(kelas_used, tenant.max_kelas),
+        admin=admin,
+    )
 
 
 @router.get("/{tenant_id}/export", dependencies=[_superadmin])

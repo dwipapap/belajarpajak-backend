@@ -85,7 +85,7 @@ _roles = Depends(require_roles(Role.superadmin, Role.admin, Role.guru, Role.sisw
 # (read-only + account management only).
 _write_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
 _review_roles = Depends(require_roles(Role.admin, Role.guru))
-_credit_roles = Depends(require_roles(Role.admin, Role.siswa))
+_credit_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
 
 
 # --- tax engine ---------------------------------------------------------------
@@ -320,10 +320,19 @@ def _validate_identity(
             )
 
 
-def _check_credit_permission(invoice: TaxInputInvoice, current_user: User) -> None:
-    # Guru never allowed to credit/uncredit, only review
+def _check_credit_permission(
+    session: Session, invoice: TaxInputInvoice, current_user: User
+) -> None:
+    # Guru may credit/uncredit only invoices in classes they teach
+    # (read-access via can_read_input_invoice already enforces this; re-verify here
+    # so the check is safe even if call order changes).
     if current_user.role == Role.guru:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Guru tidak dapat mengkreditkan faktur")
+        if invoice.class_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Guru hanya dapat mengkreditkan faktur kelas yang diajar")
+        school_class = session.get(SchoolClass, invoice.class_id)
+        if school_class is None or school_class.guru_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bukan kelas Anda")
+        return
     if current_user.role == Role.siswa and invoice.siswa_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tidak dapat mengkreditkan milik orang lain")
     if current_user.role == Role.admin and invoice.tenant_id != current_user.tenant_id:
@@ -678,7 +687,7 @@ def bulk_credit(
                 result.skipped += 1
                 result.errors.append(f"#{invoice_id}: sudah dikreditkan")
                 continue
-            _check_credit_permission(invoice, current_user)
+            _check_credit_permission(session, invoice, current_user)
             invoice.credit_status = TaxInputCreditStatus.credited
             invoice.credited_at = datetime.now(UTC)
             session.add(invoice)
@@ -711,7 +720,7 @@ def bulk_uncredit(
                 result.skipped += 1
                 result.errors.append(f"#{invoice_id}: belum dikreditkan")
                 continue
-            _check_credit_permission(invoice, current_user)
+            _check_credit_permission(session, invoice, current_user)
             invoice.credit_status = TaxInputCreditStatus.not_credited
             invoice.credited_at = None
             session.add(invoice)
@@ -843,7 +852,7 @@ def credit(invoice_id: int, current_user: CurrentUser, session: SessionDep) -> T
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} tidak valid tidak dapat dikreditkan")
     if invoice.credit_status == TaxInputCreditStatus.credited:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} sudah dikreditkan")
-    _check_credit_permission(invoice, current_user)
+    _check_credit_permission(session, invoice, current_user)
     invoice.credit_status = TaxInputCreditStatus.credited
     invoice.credited_at = datetime.now(UTC)
     session.add(invoice)
@@ -866,7 +875,7 @@ def uncredit(invoice_id: int, current_user: CurrentUser, session: SessionDep) ->
     invoice = _get_accessible_input_invoice(invoice_id, current_user, session)
     if invoice.credit_status != TaxInputCreditStatus.credited:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{LABEL} belum dikreditkan")
-    _check_credit_permission(invoice, current_user)
+    _check_credit_permission(session, invoice, current_user)
     invoice.credit_status = TaxInputCreditStatus.not_credited
     invoice.credited_at = None
     session.add(invoice)

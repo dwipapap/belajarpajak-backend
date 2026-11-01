@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import jwt
 from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
@@ -38,6 +40,18 @@ _TENANT_INACTIVE = HTTPException(
     detail="Institusi ini sedang tidak aktif. Hubungi pemilik sistem.",
 )
 
+_TENANT_EXPIRED = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Masa berlaku instansi telah habis, hubungi superadmin",
+)
+
+
+def _tenant_expired(tenant: Tenant) -> bool:
+    return (
+        tenant.berlaku_sampai is not None
+        and tenant.berlaku_sampai < date.today()
+    )
+
 
 def _resolve_login_user(session: SessionDep, data: LoginRequest) -> User:
     """Resolve the login handle.
@@ -64,6 +78,8 @@ def _ensure_login_allowed(user: User, session: SessionDep) -> None:
         tenant = session.get(Tenant, user.tenant_id)
         if tenant is None or not tenant.is_active:
             raise _TENANT_INACTIVE
+        if _tenant_expired(tenant):
+            raise _TENANT_EXPIRED
 
 
 @router.post("/login", response_model=TokenPair)

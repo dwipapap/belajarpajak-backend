@@ -37,11 +37,21 @@ class TenantUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     type: TenantType | None = None
     contact_wa: str | None = Field(default=None, max_length=20)
-    #: Setting this recomputes ``berlaku_sampai`` from today.
+    #: Setting this recomputes ``berlaku_sampai`` as
+    #: ``max(berlaku_sampai_lama, today) + N bulan`` (kalender, jaga akhir-bulan).
+    #: ``berlaku_dari`` is left untouched unless the period already expired
+    #: (or was NULL), in which case a new period starts from today.
     masa_berlaku_bulan: int | None = Field(default=None, ge=1, le=120)
     max_guru: int | None = Field(default=None, ge=0)
     max_siswa: int | None = Field(default=None, ge=0)
     max_kelas: int | None = Field(default=None, ge=0)
+    #: Explicit period override (YYYY-MM-DD). When either is sent, it wins
+    #: over ``masa_berlaku_bulan``; the unsent side is kept as-is.
+    berlaku_dari: date | None = None
+    berlaku_sampai: date | None = None
+    #: Slug is immutable — accepted by the schema only so the router can
+    #: reject it explicitly with a clear 422 message.
+    slug: str | None = Field(default=None, min_length=2, max_length=80)
 
 
 class TenantStatusUpdate(BaseModel):
@@ -59,6 +69,7 @@ class TenantRead(BaseModel):
     type: TenantType
     is_active: bool
     contact_wa: str | None
+    berlaku_dari: date | None
     berlaku_sampai: date | None
     max_guru: int | None
     max_siswa: int | None
@@ -66,3 +77,33 @@ class TenantRead(BaseModel):
     deactivated_reason: str | None
 
     model_config = {"from_attributes": True}
+
+
+class TenantQuotaUsage(BaseModel):
+    used: int
+    limit: int | None
+    full: bool
+
+
+class TenantSummaryAdmin(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    is_active: bool
+
+
+class TenantSummary(BaseModel):
+    tenant_id: int
+    name: str
+    slug: str
+    type: TenantType
+    is_active: bool
+    berlaku_dari: date | None
+    berlaku_sampai: date | None
+    days_remaining: int | None
+    expired: bool
+    expired_soon: bool
+    guru: TenantQuotaUsage
+    siswa: TenantQuotaUsage
+    kelas: TenantQuotaUsage
+    admin: TenantSummaryAdmin | None
