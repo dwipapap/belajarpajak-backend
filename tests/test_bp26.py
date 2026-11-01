@@ -84,7 +84,11 @@ def test_siswa_can_create_and_issue_bp26(client: TestClient) -> None:
     assert body["income_tax"] == 2_000_000
     assert body["withholding_number"] is None
 
-    issued = client.post(f"/api/v1/bp26/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"/api/v1/bp26/{body['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
@@ -154,7 +158,11 @@ def test_siswa_can_delete_draft_but_not_issued(client: TestClient) -> None:
     assert client.get(f"/api/v1/bp26/{draft['id']}", headers=headers).status_code == 404
 
     issued = client.post("/api/v1/bp26", headers=headers, json=_bp26_payload(class_id)).json()
-    client.post(f"/api/v1/bp26/{issued['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    client.post(
+        f"/api/v1/bp26/{issued['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     resp = client.delete(f"/api/v1/bp26/{issued['id']}", headers=headers)
     assert resp.status_code == 409
 
@@ -169,7 +177,11 @@ def test_cancel_issued_bp26_becomes_invalid(client: TestClient) -> None:
     early = client.post(f"/api/v1/bp26/{created['id']}/cancel", headers=headers, json={})
     assert early.status_code == 409
 
-    client.post(f"/api/v1/bp26/{created['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    client.post(
+        f"/api/v1/bp26/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     cancelled = client.post(
         f"/api/v1/bp26/{created['id']}/cancel",
         headers=headers,
@@ -354,7 +366,11 @@ def test_bp26_summary_counts_created_statuses_and_respects_tenant(client: TestCl
 
     client.post("/api/v1/bp26", headers=headers, json=_bp26_payload(class_id))
     issued = client.post("/api/v1/bp26", headers=headers, json=_bp26_payload(class_id)).json()
-    client.post(f"/api/v1/bp26/{issued['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    client.post(
+        f"/api/v1/bp26/{issued['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
 
     after = client.get("/api/v1/bp26/summary", headers=headers).json()
     other_after = client.get("/api/v1/bp26/summary", headers=other_headers).json()

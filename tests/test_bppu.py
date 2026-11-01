@@ -75,7 +75,11 @@ def test_siswa_can_create_and_issue_bppu(client: TestClient) -> None:
     assert body["income_tax"] == 200_000
     assert body["withholding_number"] is None
 
-    issued = client.post(f"{BASE}/bppu/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"{BASE}/bppu/{body['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200, issued.text
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
@@ -94,8 +98,16 @@ def test_bppu_invalid_transition_rejected(client: TestClient) -> None:
     assert early.status_code == 409
 
     # Issued slips cannot be issued twice.
-    client.post(f"{BASE}/bppu/{created['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
-    again = client.post(f"{BASE}/bppu/{created['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    client.post(
+        f"{BASE}/bppu/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
+    again = client.post(
+        f"{BASE}/bppu/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert again.status_code == 409
 
 
@@ -199,7 +211,11 @@ def test_pph_posting_aggregates_bppu(client: TestClient) -> None:
     assert res.status_code == 201, res.text
     created = res.json()
     assert created["income_tax"] == 200_000
-    issued = client.post(f"{BASE}/bppu/{created['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"{BASE}/bppu/{created['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200, issued.text
 
     spt = client.post(

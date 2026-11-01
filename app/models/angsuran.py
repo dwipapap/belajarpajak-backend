@@ -50,7 +50,9 @@ class Angsuran(TimestampMixin, table=True):
     n_cicilan: int = Field(ge=2, le=12)
     status: AngsuranStatus = Field(
         default=AngsuranStatus.berjalan,
-        sa_column=Column(SAEnum(AngsuranStatus, name="angsuran_status"), nullable=False, index=True),
+        sa_column=Column(
+            SAEnum(AngsuranStatus, name="angsuran_status"), nullable=False, index=True
+        ),
     )
 
 

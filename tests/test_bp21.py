@@ -56,7 +56,11 @@ def test_siswa_can_create_and_issue_bp21(client: TestClient) -> None:
     assert body["income_tax"] == 250_000
     assert body["withholding_number"] is None
 
-    issued = client.post(f"/api/v1/bp21/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    issued = client.post(
+        f"/api/v1/bp21/{body['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
     assert issued.status_code == 200
     issued_body = issued.json()
     assert issued_body["status"] == "issued"
@@ -328,7 +332,11 @@ def test_bp21_summary_counts_created_statuses_and_respects_tenant(client: TestCl
 
     client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id))
     issued = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
-    client.post(f"/api/v1/bp21/{issued['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"})
+    client.post(
+        f"/api/v1/bp21/{issued['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
+    )
 
     after = client.get("/api/v1/bp21/summary", headers=headers).json()
     other_after = client.get("/api/v1/bp21/summary", headers=other_headers).json()

@@ -46,7 +46,7 @@ _NEW_TABLES = (
 def _clean_new_tables():
     with Session(engine) as session:
         for table in _NEW_TABLES:
-            session.execute(text(f"TRUNCATE TABLE {table} RESTART CASCADE"))
+            session.execute(text(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE"))
         session.commit()
 
 
@@ -343,7 +343,6 @@ def test_spt_submit_deposit_saldo_kurang_dan_cukup(client: TestClient) -> None:
     with Session(engine) as session:
         row = session.get(TaxReturn, spt_id)
         assert row.payment_ref is not None and row.payment_ref.startswith("DEPOSIT:")
-        remaining = session.exec(text("SELECT 1")).all()  # no-op, keep session warm
     # Tidak ada billing yang diterbitkan untuk SPT deposit.
     assert (
         client.get(f"{BASE}/spt/{spt_id}/billing", headers=headers).status_code == 404

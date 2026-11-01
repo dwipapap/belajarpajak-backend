@@ -206,11 +206,19 @@ def test_guru_bulk_credit_own_class_invoice(client: TestClient):
     a = _create(client, siswa_headers, class_id=class_id)
 
     guru_headers = auth_headers(client, GURU)
-    res = client.post("/api/v1/faktur-masukan/bulk-credit", json={"ids": [a["id"]]}, headers=guru_headers)
+    res = client.post(
+        "/api/v1/faktur-masukan/bulk-credit",
+        json={"ids": [a["id"]]},
+        headers=guru_headers,
+    )
     assert res.status_code == 200, res.text
     assert res.json()["credited"] == 1
 
-    res2 = client.post("/api/v1/faktur-masukan/bulk-uncredit", json={"ids": [a["id"]]}, headers=guru_headers)
+    res2 = client.post(
+        "/api/v1/faktur-masukan/bulk-uncredit",
+        json={"ids": [a["id"]]},
+        headers=guru_headers,
+    )
     assert res2.status_code == 200, res2.text
     assert res2.json()["uncredited"] == 1
 

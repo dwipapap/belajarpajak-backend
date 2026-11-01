@@ -10,7 +10,6 @@ tidak boleh diubah.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -102,7 +101,12 @@ def _get_accessible(tagihan_id: int, current_user: User, session) -> Tagihan:
     return tagihan
 
 
-@router.post("", response_model=TagihanRead, status_code=status.HTTP_201_CREATED, dependencies=[_write_roles])
+@router.post(
+    "",
+    response_model=TagihanRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_write_roles],
+)
 def create_tagihan(
     data: TagihanCreate, current_user: CurrentUser, session: SessionDep
 ) -> TagihanRead:
@@ -205,7 +209,11 @@ def buat_billing(
     return _to_read(tagihan)
 
 
-@router.post("/{tagihan_id}/lunaskan-dari-billing", response_model=TagihanRead, dependencies=[_pay_roles])
+@router.post(
+    "/{tagihan_id}/lunaskan-dari-billing",
+    response_model=TagihanRead,
+    dependencies=[_pay_roles],
+)
 def lunaskan_dari_billing(
     tagihan_id: int, data: LunaskanRequest, current_user: CurrentUser, session: SessionDep
 ) -> TagihanRead:

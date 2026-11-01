@@ -1,11 +1,9 @@
 """SQLModel table models. Import all here so Alembic autogenerate sees the metadata."""
 
-from app.models.audit_log import AuditLog
 from app.models.angsuran import Angsuran, Cicilan
+from app.models.audit_log import AuditLog
 from app.models.billing import BillingCode
 from app.models.deposit import DepositAccount, DepositMutation
-from app.models.pbk import PbkRequest
-from app.models.tagihan import Tagihan
 from app.models.enrollment import Enrollment
 from app.models.enums import (
     BillingStatus,
@@ -26,8 +24,10 @@ from app.models.enums import (
     TaxReturnType,
     TenantType,
 )
+from app.models.pbk import PbkRequest
 from app.models.school_class import SchoolClass
 from app.models.slip import WithholdingSlip
+from app.models.tagihan import Tagihan
 from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
 from app.models.tax_input_invoice import TaxInputInvoice, TaxInputLine
 from app.models.tax_invoice import TaxInvoice, TaxInvoiceLine
