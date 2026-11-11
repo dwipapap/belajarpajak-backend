@@ -20,6 +20,7 @@ from sqlmodel import Field
 
 from app.models.base import TimestampMixin
 from app.models.enums import (
+    LbTreatment,
     SignerCapacity,
     TaxReturnKind,
     TaxReturnStatus,
@@ -108,6 +109,12 @@ class TaxReturn(TimestampMixin, table=True):
     # --- Bagian III (PPN) / Induk B (PPh) — exactly one of the two is nonzero ---
     ppn_kurang_bayar: int = Field(default=0, ge=0, sa_type=BigInteger)
     ppn_lebih_bayar: int = Field(default=0, ge=0, sa_type=BigInteger)
+    #: Perlakuan lebih bayar PPN — wajib diisi saat submit bila lebih bayar.
+    #: "restitusi" tidak dibawa ke kompensasi masa berikutnya.
+    lb_treatment: LbTreatment | None = Field(
+        default=None,
+        sa_column=Column(SAEnum(LbTreatment, name="lb_treatment"), nullable=True),
+    )
     total_income_tax: int = Field(default=0, ge=0, sa_type=BigInteger)
 
     #: Value the billing is issued for: PPN kurang bayar, or the PPh total.

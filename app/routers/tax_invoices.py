@@ -24,8 +24,17 @@ from sqlmodel import Session, func, select
 from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.money import apply_basis_points, basis_points_to_percent, percent_to_basis_points
 from app.core.scope import resolve_document_scope
-from app.models.enums import BuyerIdentityType, Role, TaxInvoiceKind, TaxInvoiceStatus
+from app.models.enrollment import Enrollment
+from app.models.enums import (
+    BuyerIdentityType,
+    Role,
+    SlipSptFlag,
+    TaxInputCreditStatus,
+    TaxInvoiceKind,
+    TaxInvoiceStatus,
+)
 from app.models.school_class import SchoolClass
+from app.models.tax_input_invoice import TaxInputInvoice
 from app.models.tax_invoice import TaxInvoice, TaxInvoiceLine
 from app.models.user import User
 from app.schemas.tax_invoice import (
@@ -45,6 +54,7 @@ from app.schemas.tax_invoice import (
     TaxInvoiceUpdate,
 )
 from app.services.audit import log_action
+from app.services.faktur_masukan import create_prepopulated_input
 from app.services.signing import require_kode_otorisasi
 
 LABEL = "Faktur Pajak Keluaran"
@@ -253,6 +263,66 @@ def invoice_to_read(session: Session, invoice: TaxInvoice) -> TaxInvoiceRead:
             "lines": [line_to_read(line) for line in _invoice_lines(session, invoice.id)],
         }
     )
+
+
+def _validate_buyer_siswa(
+    session: Session,
+    *,
+    buyer_siswa_id: int | None,
+    tenant_id: int,
+    class_id: int | None,
+    siswa_id: int,
+) -> User | None:
+    """Validate the optional classmate buyer (opsi A).
+
+    The buyer must be an active siswa of the same tenant, enrolled in the same
+    class as the faktur, and someone other than the seller. Returns the buyer
+    or None when no classmate buyer was chosen.
+    """
+    if buyer_siswa_id is None:
+        return None
+    buyer = session.get(User, buyer_siswa_id)
+    if buyer is None or buyer.role != Role.siswa or not buyer.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pembeli peserta kelas tidak valid",
+        )
+    if buyer.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pembeli harus dari institusi yang sama",
+        )
+    if buyer.id == siswa_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pembeli tidak boleh diri sendiri",
+        )
+    if class_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pilih kelas dulu untuk menentukan pembeli peserta kelas",
+        )
+    enrolled = session.exec(
+        select(Enrollment).where(
+            Enrollment.class_id == class_id, Enrollment.siswa_id == buyer.id
+        )
+    ).first()
+    if enrolled is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pembeli harus teman sekelas",
+        )
+    return buyer
+
+
+def _prepopulate_for_buyer(
+    session: Session, source: TaxInvoice, buyer: User, *, actor_id: int
+) -> None:
+    """Create the buyer's prepopulated masukan and recompute its totals."""
+    from app.routers.tax_input_invoices import recalculate_input_invoice
+
+    invoice = create_prepopulated_input(session, source, buyer, actor_id=actor_id)
+    recalculate_input_invoice(session, invoice)
 
 
 def _get_accessible_invoice(
@@ -584,6 +654,13 @@ def create_invoice(
     _validate_identity(
         data.buyer_identity_type, data.buyer_identity_number, data.buyer_document_number
     )
+    _validate_buyer_siswa(
+        session,
+        buyer_siswa_id=data.buyer_siswa_id,
+        tenant_id=tenant_id,
+        class_id=class_id,
+        siswa_id=siswa_id,
+    )
     payload = data.model_dump(exclude={"class_id", "siswa_id", "lines"})
     invoice = TaxInvoice(
         **payload,
@@ -646,6 +723,13 @@ def bulk_issue(
                 session, invoice, signer_id=current_user.id, signer_name=signer_name
             )
             session.add(invoice)
+            session.flush()
+            if invoice.buyer_siswa_id is not None:
+                buyer = session.get(User, invoice.buyer_siswa_id)
+                if buyer is not None:
+                    _prepopulate_for_buyer(
+                        session, invoice, buyer, actor_id=current_user.id
+                    )
             session.commit()
             result.issued += 1
         except IntegrityError:
@@ -695,6 +779,13 @@ def update_invoice(
         invoice.buyer_identity_number,
         invoice.buyer_document_number,
     )
+    _validate_buyer_siswa(
+        session,
+        buyer_siswa_id=invoice.buyer_siswa_id,
+        tenant_id=invoice.tenant_id,
+        class_id=invoice.class_id,
+        siswa_id=invoice.siswa_id,
+    )
 
     if lines is not None:
         _replace_lines(session, invoice, [TaxInvoiceLineCreate.model_validate(x) for x in lines])
@@ -740,6 +831,11 @@ def issue(
     signer_name = data.signer_name or current_user.full_name
     issue_invoice(session, invoice, signer_id=current_user.id, signer_name=signer_name)
     session.add(invoice)
+    session.flush()
+    if invoice.buyer_siswa_id is not None:
+        buyer = session.get(User, invoice.buyer_siswa_id)
+        if buyer is not None:
+            _prepopulate_for_buyer(session, invoice, buyer, actor_id=current_user.id)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -773,10 +869,32 @@ def cancel(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Hanya {LABEL} terbit yang dapat dibatalkan",
         )
+    derived = list(
+        session.exec(
+            select(TaxInputInvoice).where(
+                TaxInputInvoice.source_invoice_id == invoice.id,
+                TaxInputInvoice.status != TaxInvoiceStatus.invalid,
+            )
+        ).all()
+    )
+    for child in derived:
+        if (
+            child.credit_status == TaxInputCreditStatus.credited
+            and child.spt_flag == SlipSptFlag.reported_in_spt
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Faktur turunan sudah dipakai SPT dilaporkan, betulkan SPT dulu",
+            )
     invoice.status = TaxInvoiceStatus.invalid
     invoice.invoice_kind = TaxInvoiceKind.dibatalkan
     invoice.invalid_reason = data.reason or "Dibatalkan oleh penjual"
     session.add(invoice)
+    for child in derived:
+        child.status = TaxInvoiceStatus.invalid
+        child.invoice_kind = TaxInvoiceKind.dibatalkan
+        child.invalid_reason = "Faktur sumber dibatalkan penjual"
+        session.add(child)
     log_action(
         session,
         actor=current_user,

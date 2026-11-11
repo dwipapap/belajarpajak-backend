@@ -19,6 +19,7 @@ from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.security import verify_password
 from app.models.billing import BillingCode
 from app.models.enums import (
+    BillingStatus,
     Role,
     TaxReturnKind,
     TaxReturnStatus,
@@ -29,6 +30,7 @@ from app.models.tax_return import TaxReturn, TaxReturnLine
 from app.models.user import User
 from app.schemas.tax_return import (
     BillingRead,
+    SptLampiranResponse,
     TaxReturnCreate,
     TaxReturnListResponse,
     TaxReturnPernyataan,
@@ -349,6 +351,19 @@ def submit_return(
     # Numbers must reflect the documents as of this moment.
     spt_service.posting(session, tax_return)
 
+    if data.lb_treatment is not None:
+        if tax_return.return_type != TaxReturnType.ppn:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Perlakuan lebih bayar hanya berlaku untuk SPT Masa PPN",
+            )
+        tax_return.lb_treatment = data.lb_treatment
+    if tax_return.ppn_lebih_bayar > 0 and tax_return.lb_treatment is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Pilih perlakuan lebih bayar: dikompensasikan atau dikembalikan (restitusi)",
+        )
+
     if tax_return.amount_due > 0:
         if metode == "deposit":
             # Aturan lunas-sekaligus: tak ada cicilan deposit; saldo kurang → 422.
@@ -427,6 +442,7 @@ def create_pembetulan(
     tax_return.kompensasi_lebih_bayar = 0
     tax_return.ppn_kurang_bayar = 0
     tax_return.ppn_lebih_bayar = 0
+    tax_return.lb_treatment = None
     tax_return.total_income_tax = 0
     tax_return.amount_due = 0
     log_action(
@@ -462,6 +478,82 @@ def delete_return(
         )
     session.delete(tax_return)
     session.commit()
+
+
+@router.get(
+    "/{return_id}/lampiran/{kode}",
+    response_model=SptLampiranResponse,
+    dependencies=[_roles],
+)
+def get_lampiran(
+    return_id: int,
+    kode: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> SptLampiranResponse:
+    """Detail rows behind one SPT lampiran tab — same sources as posting."""
+    tax_return = _get_accessible_return(return_id, current_user, session)
+    try:
+        rows = spt_service.lampiran_rows(session, tax_return, kode)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    total = len(rows)
+    start = (page - 1) * size
+    return SptLampiranResponse(
+        items=rows[start : start + size], total=total, page=page, size=size
+    )
+
+
+@router.post("/{return_id}/batal", response_model=TaxReturnRead, dependencies=[_write_roles])
+def batal_return(
+    return_id: int,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> TaxReturnRead:
+    """BATAL: return an awaiting-payment SPT to draft, voiding unpaid billing.
+
+    Mirrors the reference portal text: the BATAL button moves the SPT from
+    MENUNGGU PEMBAYARAN back to KONSEP. Paid billing can never be voided.
+    """
+    tax_return = _get_accessible_return(return_id, current_user, session)
+    if tax_return.status != TaxReturnStatus.awaiting_payment:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Hanya SPT menunggu pembayaran yang bisa dibatalkan ke konsep",
+        )
+    billings = session.exec(
+        select(BillingCode).where(BillingCode.spt_id == tax_return.id)
+    ).all()
+    if any(b.status == BillingStatus.paid for b in billings):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kode billing sudah dibayar — SPT tidak bisa dibatalkan",
+        )
+    for billing in billings:
+        if billing.status == BillingStatus.unpaid:
+            billing.status = BillingStatus.cancelled
+            session.add(billing)
+    tax_return.status = TaxReturnStatus.draft
+    session.add(tax_return)
+    log_action(
+        session,
+        actor=current_user,
+        action="spt.batal",
+        entity="spt",
+        entity_id=tax_return.id,
+        tenant_id=tax_return.tenant_id,
+        summary=(
+            f"Membatalkan SPT {tax_return.return_type.value} masa "
+            f"{tax_return.tax_month:02d}/{tax_return.tax_year} ke konsep"
+        ),
+    )
+    session.commit()
+    session.refresh(tax_return)
+    return return_to_read(session, tax_return)
 
 
 @router.get("/{return_id}/billing", response_model=BillingRead, dependencies=[_roles])

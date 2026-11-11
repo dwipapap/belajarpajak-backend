@@ -80,7 +80,7 @@ def list_dokumen_saya(
                     jenis="bukti_potong",
                     nomor=slip.withholding_number or f"{label}-{slip.id}",
                     tanggal=slip.updated_at,
-                    uraian=f"{label} — {slip.recipient_name}",
+                    uraian=f"{label} — {slip.recipient_name or 'tanpa lawan transaksi'}",
                     masa=f"{slip.tax_month:02d}/{slip.tax_year}",
                     download_path=f"/api/v1/{slip.slip_type.value}/{slip.id}/pdf",
                 )

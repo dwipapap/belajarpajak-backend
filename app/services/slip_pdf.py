@@ -80,7 +80,11 @@ def render_slip_pdf(slip: WithholdingSlip, label: str) -> bytes:
     pdf.setFont("Helvetica", 10)
     for k, v in [
         ("Pemotong", f"{slip.withholder_name or '-'} ({slip.withholder_npwp or '-'})"),
-        ("Penerima", f"{slip.recipient_name} ({slip.recipient_identity_number})"),
+        (
+            ("Penerima", f"{slip.recipient_name} ({slip.recipient_identity_number})")
+            if slip.recipient_identity_number
+            else ("Penerima", "- (tanpa lawan transaksi)")
+        ),
         ("DPP", f"Rp{slip.dpp:,}".replace(",", ".")),
         ("PPh", f"Rp{slip.income_tax:,}".replace(",", ".")),
         ("KAP-KJS", slip.kap_kjs or "-"),

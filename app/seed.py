@@ -11,6 +11,7 @@ from datetime import date
 
 from sqlmodel import Session, func, select
 
+from app.core.config import settings
 from app.core.security import hash_password
 from app.db import engine
 from app.models.enrollment import Enrollment
@@ -38,7 +39,7 @@ from app.schemas.tax_input_invoice import TaxInputLineCreate
 from app.schemas.tax_invoice import TaxInvoiceLineCreate
 from app.services import spt as spt_service
 
-SEED_PASSWORD = "Password123!"
+SEED_PASSWORD = settings.SEED_PASSWORD
 TARIF_YEARS = (2024, 2025, 2026)
 
 PTKP_DEFAULTS: dict[str, int] = {
@@ -128,6 +129,10 @@ def seed(session: Session) -> list[dict]:
     )
     credentials.append({"tenant": "-", "role": "superadmin", "email": SUPERADMIN_EMAIL})
 
+    # Global siswa counter → unique NIS usernames across tenants
+    # (username column is globally unique; first tenant i=1..6 yields
+    # NIS00000001..NIS00000006 so siswa5 of smkn1 is NIS00000005).
+    siswa_global_index = 0
     for spec in TENANTS:
         tenant = session.exec(select(Tenant).where(Tenant.slug == spec["slug"])).first()
         if tenant is None:
@@ -173,6 +178,7 @@ def seed(session: Session) -> list[dict]:
 
         siswa_list: list[User] = []
         for i in range(1, 7):
+            siswa_global_index += 1
             siswa = _get_or_create_user(
                 session,
                 email=f"siswa{i}@{slug}.local",
@@ -180,8 +186,8 @@ def seed(session: Session) -> list[dict]:
                 role=Role.siswa,
                 tenant_id=tenant.id,
                 password_hash=pw_hash,
-                # NISN dummy per institution — the siswa login handle.
-                username=f"00{i}2345678",
+                # NIS login handle — globally unique across tenants.
+                username=f"NIS{siswa_global_index:08d}",
             )
             siswa_list.append(siswa)
             credentials.append({"tenant": slug, "role": "siswa", "email": siswa.email})
@@ -600,6 +606,20 @@ def seed_spt_examples(
         dpp_rate = 10_000
         rate = 1_500
         dpp = calculate_dpp(gross_income, dpp_rate)
+        income_tax, _ = _resolve_income_tax(
+            session,
+            slip_type=SlipType.bp23,
+            tax_nature=SlipTaxNature.final,
+            tax_facility=SlipTaxFacility.none,
+            gross_income=gross_income,
+            dpp=dpp,
+            rate_basis_points=rate,
+            ptkp_status=None,
+            tax_year=SPT_EXAMPLE_YEAR,
+            negara_treaty=None,
+            tarif_treaty_basis_points=None,
+            recipient_identity_number="1234567890123456",
+        )
         slip = WithholdingSlip(
             slip_type=SlipType.bp23,
             tenant_id=tenant.id,
@@ -620,20 +640,7 @@ def seed_spt_examples(
             dpp=dpp,
             dpp_rate_basis_points=dpp_rate,
             rate_basis_points=rate,
-            income_tax=_resolve_income_tax(
-                session,
-                slip_type=SlipType.bp23,
-                tax_nature=SlipTaxNature.final,
-                tax_facility=SlipTaxFacility.none,
-                gross_income=gross_income,
-                dpp=dpp,
-                rate_basis_points=rate,
-                ptkp_status=None,
-                tax_year=SPT_EXAMPLE_YEAR,
-                negara_treaty=None,
-                tarif_treaty_basis_points=None,
-                recipient_identity_number="1234567890123456",
-            ),
+            income_tax=income_tax,
             kap_kjs=kap_kjs,
             document_type="Kontrak",
             document_number="KTR-SPT-001",

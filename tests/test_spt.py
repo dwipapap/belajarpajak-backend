@@ -187,7 +187,12 @@ def _reported_ppn(client: TestClient, headers: dict, month: int, year: int = 202
     spt = _create_spt(client, headers, month, year=year)
     _posting(client, headers, spt["id"])
     _pernyataan(client, headers, spt["id"])
-    res = _submit(client, headers, spt["id"], status_code=200)
+    res = client.post(
+        f"{BASE}/spt/{spt['id']}/submit",
+        json={"passphrase": PASSPHRASE, "lb_treatment": "kompensasi"},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
     return res.json()
 
 
@@ -315,7 +320,11 @@ def test_submit_lebih_bayar_reports_immediately_without_billing(client: TestClie
     _posting(client, headers, spt["id"])
     _pernyataan(client, headers, spt["id"])
 
-    res = _submit(client, headers, spt["id"])
+    res = client.post(
+        f"{BASE}/spt/{spt['id']}/submit",
+        json={"passphrase": PASSPHRASE, "lb_treatment": "kompensasi"},
+        headers=headers,
+    )
     assert res.status_code == 200, res.text
     data = res.json()
     assert data["status"] == "reported"
@@ -608,3 +617,136 @@ def test_billing_pdf_pph_lists_kjs_rows(client: TestClient):
 
         pdf_bytes = render_billing_pdf(session, billing)
         assert pdf_bytes.startswith(b"%PDF-")
+
+
+# --- 009: lampiran, lebih bayar, batal ------------------------------------------------
+
+def _lampiran(client: TestClient, headers: dict, spt_id: int, kode: str):
+    res = client.get(f"{BASE}/spt/{spt_id}/lampiran/{kode}", headers=headers)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_lampiran_ppn_matches_induk(client: TestClient):
+    """Period 2026-11 PPN: A-2 totals equal Bagian I, B-2 equal Bagian II."""
+    headers = auth_headers(client, SISWA)
+    _make_keluaran_issued(client, headers, 11, transaction_code="01")
+    _make_keluaran_issued(client, headers, 11, transaction_code="04")
+    _make_masukan_credited(client, headers, 11)
+    spt = _create_spt(client, headers, 11)
+    posted = _posting(client, headers, spt["id"])
+
+    a2 = _lampiran(client, headers, spt["id"], "a2")
+    assert a2["total"] == 2
+    assert sum(row["dpp"] for row in a2["items"]) == posted["penyerahan_dpp"]
+    assert sum(row["ppn"] for row in a2["items"]) == posted["penyerahan_ppn"]
+
+    a1 = _lampiran(client, headers, spt["id"], "a1")
+    assert a1["total"] == 0  # no export invoices in this period
+
+    b2 = _lampiran(client, headers, spt["id"], "b2")
+    assert b2["total"] == 1
+    assert sum(row["dpp"] for row in b2["items"]) == posted["masukan_dpp"]
+    assert sum(row["ppn"] for row in b2["items"]) == posted["masukan_ppn"]
+
+    for empty in ("b1", "b3", "c"):
+        assert _lampiran(client, headers, spt["id"], empty)["total"] == 0
+
+    # PPh-only tabs are rejected for a PPN return.
+    bad = client.get(f"{BASE}/spt/{spt['id']}/lampiran/lampiran1", headers=headers)
+    assert bad.status_code == 422
+
+
+def test_lampiran_unifikasi_matches_induk(client: TestClient):
+    """Period 2026-11 Unifikasi: LAMPIRAN-I total equals the Induk column."""
+    headers = auth_headers(client, SISWA)
+    _make_bp23_issued(client, headers, 11, gross=4_000_000)
+    spt = _create_spt(client, headers, 11, return_type="pph_unifikasi")
+    posted = _posting(client, headers, spt["id"])
+
+    lampiran = _lampiran(client, headers, spt["id"], "lampiran1")
+    assert lampiran["total"] == 1
+    assert sum(row["pph"] for row in lampiran["items"]) == posted["total_income_tax"]
+
+    daftar1 = _lampiran(client, headers, spt["id"], "daftar1")
+    assert daftar1["total"] == 0  # no SP slips in this period
+
+    bad = client.get(f"{BASE}/spt/{spt['id']}/lampiran/a2", headers=headers)
+    assert bad.status_code == 422
+
+
+def test_batal_kurang_bayar_returns_to_draft(client: TestClient):
+    """Period 2025-10 PPN: batal from draft 409; from awaiting draft + cancelled."""
+    headers = auth_headers(client, SISWA)
+    _make_keluaran_issued(client, headers, 10, year=2025)
+    spt = _create_spt(client, headers, 10, year=2025)
+    _posting(client, headers, spt["id"])
+
+    denied = client.post(f"{BASE}/spt/{spt['id']}/batal", headers=headers)
+    assert denied.status_code == 409
+
+    _pernyataan(client, headers, spt["id"])
+    submitted = _submit(client, headers, spt["id"], status_code=200).json()
+    assert submitted["status"] == "awaiting_payment"
+
+    billing = client.get(f"{BASE}/spt/{spt['id']}/billing", headers=headers).json()
+    assert billing["status"] == "unpaid"
+
+    undone = client.post(f"{BASE}/spt/{spt['id']}/batal", headers=headers)
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["status"] == "draft"
+
+    billing = client.get(f"{BASE}/spt/{spt['id']}/billing", headers=headers).json()
+    assert billing["status"] == "cancelled"
+
+    # A cancelled billing can never be paid.
+    pay = client.post(f"{BASE}/billings/{billing['id']}/pay", headers=headers)
+    assert pay.status_code == 409
+
+
+def test_restitusi_excluded_from_carryover(client: TestClient):
+    """2025-08 lebih bayar direstitusi; 2025-09 sees no compensation."""
+    headers = auth_headers(client, SISWA)
+    _make_masukan_credited(client, headers, 8, year=2025)
+    earlier = _create_spt(client, headers, 8, year=2025)
+    _posting(client, headers, earlier["id"])
+    _pernyataan(client, headers, earlier["id"])
+    res = client.post(
+        f"{BASE}/spt/{earlier['id']}/submit",
+        json={"passphrase": PASSPHRASE, "lb_treatment": "restitusi"},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "reported"
+    assert res.json()["lb_treatment"] == "restitusi"
+
+    _make_masukan_credited(client, headers, 9, year=2025)
+    later = _create_spt(client, headers, 9, year=2025)
+    posted = _posting(client, headers, later["id"])
+    assert posted["kompensasi_lebih_bayar"] == 0
+
+
+def test_lebih_bayar_requires_lb_treatment(client: TestClient):
+    """Period 2025-11 PPN: submit lebih bayar without treatment is 422."""
+    headers = auth_headers(client, SISWA)
+    _make_masukan_credited(client, headers, 11, year=2025)
+    spt = _create_spt(client, headers, 11, year=2025)
+    posted = _posting(client, headers, spt["id"])
+    assert posted["ppn_lebih_bayar"] > 0
+    _pernyataan(client, headers, spt["id"])
+
+    res = client.post(
+        f"{BASE}/spt/{spt['id']}/submit",
+        json={"passphrase": PASSPHRASE},
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+    res = client.post(
+        f"{BASE}/spt/{spt['id']}/submit",
+        json={"passphrase": PASSPHRASE, "lb_treatment": "kompensasi"},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "reported"
+    assert res.json()["lb_treatment"] == "kompensasi"

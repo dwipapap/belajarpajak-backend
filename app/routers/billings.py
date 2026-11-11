@@ -257,6 +257,11 @@ def pay_billing(
     from app.services import kjs as kjs_service
 
     billing = _get_accessible_billing(billing_id, current_user, session)
+    if billing.status == BillingStatus.cancelled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kode billing dibatalkan — buat SPT atau ajukan ulang bila masih kurang bayar",
+        )
     if billing.status == BillingStatus.paid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

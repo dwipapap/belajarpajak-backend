@@ -9,6 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # backend/ directory (two levels up from this file: app/core/config.py -> app -> backend)
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_SECRET_KEY = "change-me-in-production"
+DEFAULT_SEED_PASSWORD = "Password123!"
+LOCAL_ENVS = {"development", "test"}
 UNSAFE_SECRET_KEYS = {
     DEFAULT_SECRET_KEY,
     "change-me-in-production-please-use-a-long-random-string",
@@ -38,6 +40,8 @@ class Settings(BaseSettings):
 
     # Behaviour
     AUTO_SEED: bool = True
+    # Password for every seeded account. Override it on any shared server.
+    SEED_PASSWORD: str = DEFAULT_SEED_PASSWORD
 
     @property
     def cors_origins(self) -> list[str]:
@@ -48,6 +52,13 @@ class Settings(BaseSettings):
         return self.APP_ENV.lower() == "production"
 
     def validate_runtime_safety(self) -> None:
+        # Shared servers (e.g. APP_ENV=demo) must not expose the documented
+        # seed password or the default JWT secret.
+        if self.APP_ENV.lower() not in LOCAL_ENVS:
+            if self.SECRET_KEY in UNSAFE_SECRET_KEYS:
+                raise RuntimeError(f"APP_ENV={self.APP_ENV} requires a random SECRET_KEY.")
+            if self.AUTO_SEED and self.SEED_PASSWORD == DEFAULT_SEED_PASSWORD:
+                raise RuntimeError(f"APP_ENV={self.APP_ENV} requires a non-default SEED_PASSWORD.")
         if not self.is_production:
             return
         if self.SECRET_KEY in UNSAFE_SECRET_KEYS:

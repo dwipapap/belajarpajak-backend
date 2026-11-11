@@ -8,12 +8,13 @@ statement (pernyataan) fields.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.enums import (
     BillingStatus,
+    LbTreatment,
     SignerCapacity,
     TaxReturnKind,
     TaxReturnStatus,
@@ -50,6 +51,8 @@ class TaxReturnSubmit(BaseModel):
     """Bayar dan Lapor — passphrase verifies the signer (pola e-sign)."""
 
     passphrase: str = Field(min_length=1, max_length=100)
+    #: Perlakuan lebih bayar PPN — wajib bila SPT lebih bayar (validasi server).
+    lb_treatment: LbTreatment | None = None
 
 
 class TaxReturnReview(BaseModel):
@@ -106,6 +109,7 @@ class TaxReturnRead(BaseModel):
     kompensasi_lebih_bayar: int
     ppn_kurang_bayar: int
     ppn_lebih_bayar: int
+    lb_treatment: LbTreatment | None = None
     total_income_tax: int
     amount_due: int
 
@@ -129,6 +133,29 @@ class TaxReturnSummary(BaseModel):
     awaiting_payment: int = 0
     reported: int = 0
     total: int = 0
+
+
+class SptLampiranRow(BaseModel):
+    """One generic lampiran table row, backed by a source document."""
+
+    nama: str
+    identitas: str | None = None
+    nomor_dokumen: str | None = None
+    tanggal_dokumen: date | None = None
+    dpp: int = 0
+    ppn: int = 0
+    ppnbm: int = 0
+    kjs: str | None = None
+    pph: int = 0
+    source_type: str
+    source_id: int
+
+
+class SptLampiranResponse(BaseModel):
+    items: list[SptLampiranRow]
+    total: int
+    page: int
+    size: int
 
 
 class BillingLineRead(BaseModel):
