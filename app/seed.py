@@ -11,6 +11,7 @@ from datetime import date
 
 from sqlmodel import Session, func, select
 
+from app.core.config import settings
 from app.core.security import hash_password
 from app.db import engine
 from app.models.enrollment import Enrollment
@@ -38,7 +39,7 @@ from app.schemas.tax_input_invoice import TaxInputLineCreate
 from app.schemas.tax_invoice import TaxInvoiceLineCreate
 from app.services import spt as spt_service
 
-SEED_PASSWORD = "Password123!"
+SEED_PASSWORD = settings.SEED_PASSWORD
 TARIF_YEARS = (2024, 2025, 2026)
 
 PTKP_DEFAULTS: dict[str, int] = {
