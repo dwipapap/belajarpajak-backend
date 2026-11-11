@@ -121,8 +121,9 @@ def _slip_row(session: Session, slip: WithholdingSlip) -> SptLampiranRow:
     if tanggal is None and slip.issued_at is not None:
         tanggal = slip.issued_at.date()
     return SptLampiranRow(
-        nama=slip.recipient_name,
-        identitas=slip.recipient_identity_number,
+        # SP (setor sendiri) has no counterparty: the depositor is the row.
+        nama=slip.recipient_name or slip.withholder_name or "-",
+        identitas=slip.recipient_identity_number or slip.withholder_npwp,
         nomor_dokumen=slip.withholding_number,
         tanggal_dokumen=tanggal,
         kjs=_slip_kjs(slip),

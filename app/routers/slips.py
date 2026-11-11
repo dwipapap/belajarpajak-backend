@@ -447,7 +447,7 @@ def _resolve_income_tax(
         return _tax_by_basis_points(dpp, tarif_treaty_basis_points), "treaty"
 
     final_rate_basis_points = rate_basis_points
-    if slip_type in (SlipType.bp23, SlipType.bppu, SlipType.sp, SlipType.cy) and (
+    if slip_type in (SlipType.bp23, SlipType.bppu) and (
         not recipient_identity_number or recipient_identity_number.startswith("0000000000000000")
     ):
         final_rate_basis_points *= 2
@@ -457,6 +457,20 @@ def _resolve_income_tax(
 
 
 # --- shared access / lifecycle helpers ---------------------------------------
+
+
+#: Types with no counterparty: the depositor is the withholder itself.
+NO_COUNTERPARTY_TYPES = (SlipType.sp, SlipType.cy)
+#: Types whose form takes Dasar Pengenaan Pajak directly (stored as
+#: gross = DPP at 100%, so recalculation stays uniform). BPPU still accepts
+#: the older gross_income + dpp_percent pair (e.g. XML import).
+DIRECT_DPP_TYPES = (SlipType.sp, SlipType.cy, SlipType.bppu)
+FULL_DPP_BASIS_POINTS = 10_000
+
+
+def slip_party_name(slip: WithholdingSlip) -> str:
+    """Counterparty name, or the depositor for SP/CY (which have none)."""
+    return slip.recipient_name or slip.withholder_name or "Penyetor"
 
 
 def slip_to_read(slip: WithholdingSlip) -> SlipRead:
@@ -562,6 +576,14 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         data: SlipCreate, current_user: CurrentUser, session: SessionDep
     ) -> WithholdingSlip:
         """Validate scope and construct an unsaved draft slip from a create payload."""
+        no_counterparty = slip_type in NO_COUNTERPARTY_TYPES
+        direct_dpp = slip_type in DIRECT_DPP_TYPES and data.dpp is not None
+        if not no_counterparty and (not data.recipient_identity_number or not data.recipient_name):
+            raise HTTPException(status_code=422, detail="Identitas dan nama penerima wajib diisi")
+        if no_counterparty and data.dpp is None:
+            raise HTTPException(status_code=422, detail="Dasar Pengenaan Pajak wajib diisi")
+        if not direct_dpp and (data.gross_income is None or data.dpp_percent is None):
+            raise HTTPException(status_code=422, detail="Penghasilan bruto dan persentase DPP wajib diisi")
         _validate_learning_fields(
             slip_type=slip_type,
             recipient_identity_number=data.recipient_identity_number,
@@ -590,14 +612,20 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             label=label,
         )
         rate_basis_points = percent_to_basis_points(data.rate_percent)
-        dpp_rate_basis_points = percent_to_basis_points(data.dpp_percent)
-        dpp = calculate_dpp(data.gross_income, dpp_rate_basis_points)
+        if direct_dpp:
+            dpp_rate_basis_points = FULL_DPP_BASIS_POINTS
+            gross_income = data.dpp
+            dpp = data.dpp
+        else:
+            dpp_rate_basis_points = percent_to_basis_points(data.dpp_percent)
+            gross_income = data.gross_income
+            dpp = calculate_dpp(gross_income, dpp_rate_basis_points)
         income_tax, calculation_method = _resolve_income_tax(
             session,
             slip_type=slip_type,
             tax_nature=data.tax_nature,
             tax_facility=data.tax_facility,
-            gross_income=data.gross_income,
+            gross_income=gross_income,
             dpp=dpp,
             rate_basis_points=rate_basis_points,
             ptkp_status=data.ptkp_status,
@@ -608,7 +636,10 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             ter_category=data.ter_category,
             tax_month=data.tax_month,
         )
-        payload = data.model_dump(exclude={"class_id", "siswa_id", "dpp_percent", "rate_percent"})
+        payload = data.model_dump(exclude={"class_id", "siswa_id", "dpp_percent", "rate_percent", "dpp"})
+        if no_counterparty:
+            for field in ("recipient_identity_number", "recipient_name", "recipient_address", "recipient_nitku"):
+                payload[field] = None
         return WithholdingSlip(
             **payload,
             slip_type=slip_type,
@@ -948,7 +979,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             entity=slip_type.value,
             entity_id=slip.id,
             tenant_id=slip.tenant_id,
-            summary=f"Membuat {label} untuk {slip.recipient_name}",
+            summary=f"Membuat {label} untuk {slip_party_name(slip)}",
         )
         session.commit()
         session.refresh(slip)
@@ -1009,6 +1040,21 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             )
 
         payload = data.model_dump(exclude_unset=True)
+        if slip_type in DIRECT_DPP_TYPES and payload.get("dpp") is not None:
+            slip.gross_income = payload.pop("dpp")
+            slip.dpp_rate_basis_points = FULL_DPP_BASIS_POINTS
+            payload.pop("gross_income", None)
+            payload.pop("dpp_percent", None)
+        payload.pop("dpp", None)
+        if slip_type in NO_COUNTERPARTY_TYPES:
+            for field in ("recipient_identity_number", "recipient_name", "recipient_address", "recipient_nitku"):
+                payload.pop(field, None)
+        else:
+            for field in ("recipient_identity_number", "recipient_name"):
+                if field in payload and not payload[field]:
+                    raise HTTPException(
+                        status_code=422, detail="Identitas dan nama penerima wajib diisi"
+                    )
         class_id = payload.get("class_id", slip.class_id)
         siswa_id = payload.get("siswa_id", slip.siswa_id)
         tenant_id, resolved_class_id, resolved_siswa_id = resolve_document_scope(
@@ -1092,7 +1138,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             entity=slip_type.value,
             entity_id=slip.id,
             tenant_id=slip.tenant_id,
-            summary=f"Menghapus {label} draft atas nama {slip.recipient_name}",
+            summary=f"Menghapus {label} draft atas nama {slip_party_name(slip)}",
         )
         session.delete(slip)
         session.commit()
@@ -1146,7 +1192,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             tenant_id=slip.tenant_id,
             summary=(
                 f"Menerbitkan {label} {slip.withholding_number} "
-                f"atas nama {slip.recipient_name}"
+                f"atas nama {slip_party_name(slip)}"
             ),
         )
         session.commit()

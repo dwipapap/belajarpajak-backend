@@ -24,8 +24,8 @@ class SlipBase(BaseModel):
     withholder_name: str | None = Field(default=None, max_length=150)
     withholder_nitku: str | None = Field(default=None, max_length=32)
 
-    recipient_identity_number: str = Field(max_length=32)
-    recipient_name: str = Field(max_length=150)
+    recipient_identity_number: str | None = Field(default=None, max_length=32)
+    recipient_name: str | None = Field(default=None, max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
     recipient_nitku: str | None = Field(default=None, max_length=32)
 
@@ -40,8 +40,9 @@ class SlipBase(BaseModel):
     tax_facility: SlipTaxFacility = SlipTaxFacility.none
 
     previous_gross_income: int = Field(default=0, ge=0)
-    gross_income: int = Field(ge=0)
-    dpp_percent: float = Field(ge=0, le=100)
+    gross_income: int | None = Field(default=None, ge=0)
+    dpp_percent: float | None = Field(default=None, ge=0, le=100)
+    dpp: int | None = Field(default=None, ge=0)
     rate_percent: float = Field(ge=0, le=100)
     kap_kjs: str | None = Field(default=None, max_length=20)
     negara_treaty: str | None = Field(default=None, max_length=5)
@@ -105,6 +106,7 @@ class SlipUpdate(BaseModel):
     previous_gross_income: int | None = Field(default=None, ge=0)
     gross_income: int | None = Field(default=None, ge=0)
     dpp_percent: float | None = Field(default=None, ge=0, le=100)
+    dpp: int | None = Field(default=None, ge=0)
     rate_percent: float | None = Field(default=None, ge=0, le=100)
     kap_kjs: str | None = Field(default=None, max_length=20)
     negara_treaty: str | None = Field(default=None, max_length=5)
@@ -186,8 +188,8 @@ class SlipRead(BaseModel):
     withholder_name: str | None
     withholder_nitku: str | None
 
-    recipient_identity_number: str
-    recipient_name: str
+    recipient_identity_number: str | None
+    recipient_name: str | None
     recipient_address: str | None
     recipient_nitku: str | None
 

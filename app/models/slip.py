@@ -59,8 +59,8 @@ class WithholdingSlip(TimestampMixin, table=True):
     withholder_name: str | None = Field(default=None, max_length=150)
     withholder_nitku: str | None = Field(default=None, max_length=32)
 
-    recipient_identity_number: str = Field(max_length=32)
-    recipient_name: str = Field(max_length=150)
+    recipient_identity_number: str | None = Field(default=None, max_length=32)
+    recipient_name: str | None = Field(default=None, max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
     recipient_nitku: str | None = Field(default=None, max_length=32)
 
