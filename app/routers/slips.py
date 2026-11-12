@@ -36,6 +36,7 @@ from app.models.enums import (
 from app.models.school_class import SchoolClass
 from app.models.slip import WithholdingSlip
 from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.slip import (
     SlipBulkIssue,
@@ -1156,7 +1157,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"BPE simulasi hanya untuk {label} yang telah terbit",
             )
-        pdf_bytes = render_slip_pdf(slip, label)
+        tenant = session.get(Tenant, slip.tenant_id)
+        pdf_bytes = render_slip_pdf(slip, label, tenant.name if tenant else None)
         filename = slip.withholding_number or f"{label}-{slip.id}"
         return Response(
             content=pdf_bytes,
