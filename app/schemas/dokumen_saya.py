@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 
 class DokumenSayaRow(BaseModel):
-    jenis: Literal["bpe_spt", "bukti_potong", "kode_billing"]
+    jenis: Literal["spt", "bpe_spt", "bukti_potong", "faktur", "kode_billing"]
     nomor: str
     tanggal: datetime | None = None
     uraian: str

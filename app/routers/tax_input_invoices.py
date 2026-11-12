@@ -32,6 +32,7 @@ from app.models.enums import (
 from app.models.school_class import SchoolClass
 from app.models.tax_input_invoice import TaxInputInvoice, TaxInputLine
 from app.models.tax_invoice import TaxInvoice
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.tax_input_invoice import (
     DPP_OTHER_CODES,
@@ -759,6 +760,32 @@ def get_input_invoice(
     invoice_id: int, current_user: CurrentUser, session: SessionDep
 ) -> TaxInputRead:
     return invoice_to_read(session, _get_accessible_input_invoice(invoice_id, current_user, session))
+
+
+@router.get("/{invoice_id}/pdf", dependencies=[_roles])
+def download_invoice_pdf(
+    invoice_id: int, current_user: CurrentUser, session: SessionDep
+) -> Response:
+    """Faktur Pajak simulasi (PDF). Draft ditolak; yang dibatalkan ditandai DIBATALKAN."""
+    from app.services.faktur_pdf import render_faktur_pdf
+
+    invoice = _get_accessible_input_invoice(invoice_id, current_user, session)
+    if invoice.status == TaxInvoiceStatus.draft:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"PDF hanya tersedia untuk {LABEL} yang telah terbit",
+        )
+    tenant = session.get(Tenant, invoice.tenant_id)
+    lines = _input_lines(session, invoice.id)
+    pdf_bytes = render_faktur_pdf(invoice, lines, tenant.name if tenant else None)
+    number = "".join(ch for ch in (invoice.invoice_number or "") if ch.isalnum() or ch in "-_")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="FakturPajak-{number or invoice.id}.pdf"'
+        },
+    )
 
 
 @router.patch("/{invoice_id}", response_model=TaxInputRead, dependencies=[_write_roles])
