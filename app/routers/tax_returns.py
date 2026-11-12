@@ -503,9 +503,7 @@ def get_lampiran(
         ) from exc
     total = len(rows)
     start = (page - 1) * size
-    return SptLampiranResponse(
-        items=rows[start : start + size], total=total, page=page, size=size
-    )
+    return SptLampiranResponse(items=rows[start : start + size], total=total, page=page, size=size)
 
 
 @router.post("/{return_id}/batal", response_model=TaxReturnRead, dependencies=[_write_roles])
@@ -525,9 +523,7 @@ def batal_return(
             status_code=status.HTTP_409_CONFLICT,
             detail="Hanya SPT menunggu pembayaran yang bisa dibatalkan ke konsep",
         )
-    billings = session.exec(
-        select(BillingCode).where(BillingCode.spt_id == tax_return.id)
-    ).all()
+    billings = session.exec(select(BillingCode).where(BillingCode.spt_id == tax_return.id)).all()
     if any(b.status == BillingStatus.paid for b in billings):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -600,6 +596,47 @@ def download_bpe(
     )
 
 
+@router.get("/{return_id}/pdf", dependencies=[_roles])
+def download_spt_pdf(
+    return_id: int,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> Response:
+    """Unduh dokumen SPT (PDF) — tersedia setelah SPT diposting atau dilaporkan."""
+    from app.models.tenant import Tenant
+    from app.services.spt_pdf import render_spt_pdf
+
+    tax_return = _get_accessible_return(return_id, current_user, session)
+    lines = session.exec(
+        select(TaxReturnLine)
+        .where(TaxReturnLine.return_id == tax_return.id)
+        .order_by(TaxReturnLine.id)
+    ).all()
+    # A draft only has content once it was posted (posting writes the line snapshot);
+    # awaiting_payment/reported SPT are always posted.
+    if tax_return.status == TaxReturnStatus.draft and not lines:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="PDF SPT tersedia setelah SPT diposting. Lakukan Posting SPT terlebih dahulu",
+        )
+    tenant = session.get(Tenant, tax_return.tenant_id)
+    siswa = session.get(User, tax_return.siswa_id)
+    pdf_bytes = render_spt_pdf(
+        tax_return,
+        lines,
+        tenant.name if tenant else None,
+        siswa.full_name if siswa else None,
+    )
+    filename = (
+        f"SPT-{tax_return.return_type.value}-{tax_return.tax_year}-{tax_return.tax_month:02d}"
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}.pdf"'},
+    )
+
+
 @router.patch("/{return_id}/review", response_model=TaxReturnRead, dependencies=[_review_roles])
 def review_return(
     return_id: int,
@@ -619,8 +656,7 @@ def review_return(
         entity_id=tax_return.id,
         tenant_id=tax_return.tenant_id,
         summary=(
-            f"Menilai SPT masa {tax_return.tax_month:02d}/{tax_return.tax_year} "
-            f"(skor {data.score})"
+            f"Menilai SPT masa {tax_return.tax_month:02d}/{tax_return.tax_year} (skor {data.score})"
         ),
     )
     session.commit()
