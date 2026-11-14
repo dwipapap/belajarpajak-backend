@@ -47,6 +47,10 @@ class SlipTaxFacility(StrEnum):
     none = "none"
     dtp = "dtp"
     skb = "skb"
+    #: SKD WPLN / P3B (kode fasilitas 7); treaty data lives on the slip.
+    treaty = "treaty"
+    #: Fasilitas Lainnya (kode fasilitas 8): rate entered manually.
+    lainnya = "lainnya"
     rate_0 = "rate_0"
 
 

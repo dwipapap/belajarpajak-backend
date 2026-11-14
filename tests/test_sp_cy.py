@@ -38,8 +38,8 @@ def _payload(class_id: int, code: str, rate: str, kap: str) -> dict:
 @pytest.mark.parametrize(
     ("module", "code", "rate", "kap", "tax"),
     [
-        ("sp", "24-102-01", "2.00", "411124-104", 200_000),
-        ("cy", "27-100-01", "20.00", "411127-100", 2_000_000),
+        ("sp", "28-403-02", "10.00", "411128-403", 1_000_000),
+        ("cy", "27-102-03", "10.00", "411127-110", 1_000_000),
     ],
 )
 def test_sp_cy_without_counterparty(
@@ -47,7 +47,9 @@ def test_sp_cy_without_counterparty(
 ) -> None:
     headers = auth_headers(client, SISWA_A)
     created = client.post(
-        f"{BASE}/{module}", headers=headers, json=_payload(_class_id(client, headers), code, rate, kap)
+        f"{BASE}/{module}",
+        headers=headers,
+        json=_payload(_class_id(client, headers), code, rate, kap),
     )
     assert created.status_code == 201, created.text
     body = created.json()
@@ -57,13 +59,17 @@ def test_sp_cy_without_counterparty(
     assert body["income_tax"] == tax
     assert body["calculation_method"] == "flat"
 
-    updated = client.patch(f"{BASE}/{module}/{body['id']}", headers=headers, json={"dpp": 5_000_000})
+    updated = client.patch(
+        f"{BASE}/{module}/{body['id']}", headers=headers, json={"dpp": 5_000_000}
+    )
     assert updated.status_code == 200, updated.text
     assert updated.json()["dpp"] == 5_000_000
     assert updated.json()["income_tax"] == tax // 2
 
     issued = client.post(
-        f"{BASE}/{module}/{body['id']}/issue", headers=headers, json={"kode_otorisasi": "KO-SIM-123"}
+        f"{BASE}/{module}/{body['id']}/issue",
+        headers=headers,
+        json={"kode_otorisasi": "KO-SIM-123"},
     )
     assert issued.status_code == 200, issued.text
     assert client.get(f"{BASE}/{module}/{body['id']}/pdf", headers=headers).status_code == 200
@@ -72,7 +78,7 @@ def test_sp_cy_without_counterparty(
 
 def test_bppu_still_requires_counterparty(client: TestClient) -> None:
     headers = auth_headers(client, SISWA_A)
-    payload = _payload(_class_id(client, headers), "24-100-01", "15.00", "411124-100")
+    payload = _payload(_class_id(client, headers), "24-101-01", "15.00", "411124-100")
     payload.pop("recipient_identity_number")
     payload.pop("recipient_name")
     resp = client.post(f"{BASE}/bppu", headers=headers, json=payload)
@@ -81,7 +87,7 @@ def test_bppu_still_requires_counterparty(client: TestClient) -> None:
 
 def test_bppu_accepts_direct_dpp(client: TestClient) -> None:
     headers = auth_headers(client, SISWA_A)
-    payload = _payload(_class_id(client, headers), "24-100-01", "15.00", "411124-100")
+    payload = _payload(_class_id(client, headers), "24-101-01", "15.00", "411124-100")
     payload["tax_type"] = "PPh 23"
     created = client.post(f"{BASE}/bppu", headers=headers, json=payload)
     assert created.status_code == 201, created.text

@@ -30,7 +30,7 @@ def _bp21_payload(class_id: int) -> dict:
         "recipient_address": "Jl. Pendidikan No. 21",
         "recipient_nitku": "3273010101010001000000",
         "ptkp_status": None,
-        "tax_object_code": "21-100-09",
+        "tax_object_code": "21-100-07",
         "income_type": "Honorarium tenaga ahli",
         "tax_nature": "non_final",
         "tax_facility": "none",
