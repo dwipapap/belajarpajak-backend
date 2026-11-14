@@ -358,6 +358,41 @@ def _pph21_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]
                     ditanggung_pemerintah=amounts["ditanggung_pemerintah"],
                 )
             )
+    lines.extend(
+        _unlisted_kjs_lines(
+            tax_return, aggregated, kjs.KJS_PPH_21_26, fallback_section="pasal_26"
+        )
+    )
+    return lines
+
+
+def _unlisted_kjs_lines(
+    tax_return: TaxReturn,
+    aggregated: dict[str, dict[str, int]],
+    known: dict[str, list[str]],
+    *,
+    fallback_section: str,
+) -> list[TaxReturnLine]:
+    """Rows for slip KJS codes missing from the catalog lists, so their amounts
+    are never silently dropped from the Induk."""
+    listed = {code for codes in known.values() for code in codes}
+    lines = []
+    for kjs_code in sorted(set(aggregated) - listed):
+        section = kjs.pasal_for_kjs(kjs_code)
+        if section not in known:
+            section = fallback_section
+        amounts = aggregated[kjs_code]
+        lines.append(
+            TaxReturnLine(
+                return_id=tax_return.id,
+                section=section,
+                code=kjs_code,
+                description=f"KJS:{kjs_code}",
+                setor_sendiri=amounts["setor_sendiri"],
+                pemotongan=amounts["pemotongan"],
+                ditanggung_pemerintah=amounts["ditanggung_pemerintah"],
+            )
+        )
     return lines
 
 
@@ -416,6 +451,11 @@ def _pph_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
                     ditanggung_pemerintah=amounts["ditanggung_pemerintah"],
                 )
             )
+    lines.extend(
+        _unlisted_kjs_lines(
+            tax_return, aggregated, kjs.KJS_PPH_UNIFIKASI, fallback_section="pasal_4_2"
+        )
+    )
     return lines
 
 

@@ -12,10 +12,10 @@ from __future__ import annotations
 #: KJS groups for SPT PPh Unifikasi, keyed by pasal section code.
 KJS_PPH_UNIFIKASI: dict[str, list[str]] = {
     "pasal_4_2": ["411128-100", "411128-402", "411128-403"],
-    "pasal_15": ["411115-600", "411129-600"],
+    "pasal_15": ["411115-600", "411128-600", "411129-600"],
     "pasal_22": ["411122-100", "411122-900", "411122-910"],
     "pasal_23": ["411124-100", "411124-101", "411124-102", "411124-103", "411124-104"],
-    "pasal_26": ["411127-110", "411127-460"],
+    "pasal_26": ["411127-100", "411127-110", "411127-460"],
 }
 
 #: Human labels for the pasal sections, as they appear on the Induk table.
@@ -32,7 +32,7 @@ PASAL_LABELS: dict[str, str] = {
 #: used elsewhere in the simulator appear here — no new KJS invented.
 KJS_PPH_21_26: dict[str, list[str]] = {
     "pasal_21": ["411121-100"],
-    "pasal_26": ["411127-110", "411127-460"],
+    "pasal_26": ["411127-100", "411127-110", "411127-460"],
 }
 #: Single KJS for SPT Masa PPN kurang bayar (KAP PPN 411211).
 KJS_PPN_MASA = "411211-100"
@@ -54,7 +54,27 @@ def pasal_for_kjs(kjs: str) -> str | None:
     for pasal, codes in KJS_PPH_21_26.items():
         if kjs in codes:
             return pasal
-    return None
+    return _pasal_by_prefix(kjs)
+
+
+#: KAP prefix (first 6 digits) -> pasal section, for codes not listed above.
+_KAP_PREFIX_PASAL: dict[str, str] = {
+    "411121": "pasal_21",
+    "411122": "pasal_22",
+    "411124": "pasal_23",
+    "411127": "pasal_26",
+    "411128": "pasal_4_2",
+    "411129": "pasal_15",
+    "411115": "pasal_15",
+}
+
+
+def _pasal_by_prefix(kjs: str) -> str | None:
+    """Best-effort pasal for a KJS the catalogs do not list (never raises)."""
+    code = (kjs or "").strip()
+    if code.endswith("-600"):
+        return "pasal_15"
+    return _KAP_PREFIX_PASAL.get(code[:6])
 
 
 #: Payment channels accepted by POST /billings/{id}/pay.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from app.models.enums import SlipStatus, SlipTaxFacility, SlipTaxNature, SlipType
 from app.models.slip import WithholdingSlip
+from app.services import objek_pajak
 from app.services.pdf_kit import (
     SIGN_VALID_NOTE,
     Col,
@@ -95,31 +96,13 @@ def _sifat(slip: WithholdingSlip) -> str:
     return "FINAL" if slip.tax_nature == SlipTaxNature.final else "TIDAK FINAL"
 
 
-# Fallback names for slips saved without ``tax_object_name`` (BP21, BP23, SP,
-# CY forms only send the code).
-_OBJECT_NAMES = {
-    "21-100-01": "Gaji Pegawai Tetap",
-    "21-100-02": "Pensiun Berkala",
-    "21-100-09": "Honorarium Tenaga Ahli",
-    "21-401-01": "Imbalan Pegawai Tidak Tetap",
-    "21-401-02": "Upah Harian / Mingguan",
-    "21-499-99": "Penghasilan Bukan Pegawai Lainnya",
-    "24-100-01": "Dividen",
-    "24-101-01": "Bunga",
-    "24-102-01": "Sewa dan Penghasilan Lain Sehubungan dengan Penggunaan Harta",
-    "24-103-01": "Royalti",
-    "24-104-01": "Jasa Konsultan",
-    "27-100-01": "Dividen yang Diterima Wajib Pajak Luar Negeri",
-    "27-100-02": "Bunga yang Diterima Wajib Pajak Luar Negeri",
-    "27-100-03": "Royalti yang Diterima Wajib Pajak Luar Negeri",
-    "27-100-04": "Imbalan Sehubungan dengan Jasa, Pekerjaan, dan Kegiatan",
-    "27-100-05": "Hadiah dan Penghargaan yang Diterima Wajib Pajak Luar Negeri",
-    "28-100-01": "Jasa Konstruksi",
-}
+def _catalog_name(slip: WithholdingSlip) -> str | None:
+    obj = objek_pajak.get_object(slip.slip_type, slip.tax_object_code or "")
+    return obj["nama"] if obj else None
 
 
 def _object_name(slip: WithholdingSlip) -> str | None:
-    return slip.tax_object_name or slip.income_type or _OBJECT_NAMES.get(slip.tax_object_code or "")
+    return slip.tax_object_name or slip.income_type or _catalog_name(slip)
 
 
 def render_slip_pdf(slip: WithholdingSlip, label: str, tenant_name: str | None = None) -> bytes:

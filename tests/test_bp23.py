@@ -9,7 +9,7 @@ def test_bp23_calculation_normal(client: TestClient):
         "tax_year": 2026,
         "recipient_identity_number": "1234567890123456",
         "recipient_name": "Test BP23",
-        "tax_object_code": "24-100-01",
+        "tax_object_code": "24-101-01",
         "gross_income": 10000000,
         "dpp_percent": 100,
         "rate_percent": 15
@@ -26,7 +26,7 @@ def test_bp23_calculation_no_npwp(client: TestClient):
         "tax_year": 2026,
         "recipient_identity_number": "0000000000000000",
         "recipient_name": "No NPWP BP23",
-        "tax_object_code": "24-100-01",
+        "tax_object_code": "24-101-01",
         "gross_income": 10000000,
         "dpp_percent": 100,
         "rate_percent": 15

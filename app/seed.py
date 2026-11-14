@@ -590,7 +590,7 @@ def seed_spt_examples(
         session.add(masukan)
         session.flush()
 
-    # 3. BP23 issued — bruto 10.000.000, tarif 15%, PPh 1.500.000 (KJS jasa).
+    # 3. BP23 issued — dividen 24-101-01, bruto 10.000.000, tarif 15%, PPh 1.500.000.
     kap_kjs = "411124-100"
     slip_exists = session.exec(
         select(WithholdingSlip).where(
@@ -631,9 +631,9 @@ def seed_spt_examples(
             recipient_identity_number="1234567890123456",
             recipient_name="PEMOTONGAN SIMULASI SEPTEMBER",
             recipient_address="JL SUDIRMAN NO.45, PEKANBARU",
-            tax_object_code="24-100-01",
-            tax_object_name="Penggunaan jasa",
-            income_type="Jasa Simulasi",
+            tax_object_code="24-101-01",
+            tax_object_name="Dividen",
+            income_type="Dividen Simulasi",
             tax_nature=SlipTaxNature.final,
             tax_facility=SlipTaxFacility.none,
             gross_income=gross_income,

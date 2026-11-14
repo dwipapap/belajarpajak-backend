@@ -26,8 +26,8 @@ def _bppu_payload(class_id: int) -> dict:
         "recipient_identity_number": "1234567890123456",
         "recipient_name": "PT PENERIMA BPPU",
         "tax_type": "PPh 4(2)",
-        "tax_object_code": "28-100-01",
-        "tax_object_name": "Jasa konstruksi",
+        "tax_object_code": "28-409-10",
+        "tax_object_name": "Jasa Konstruksi",
         "tax_nature": "final",
         "tax_facility": "none",
         "gross_income": 10_000_000,
@@ -51,7 +51,7 @@ def _import_xml(class_id: int, *, gross_income: str = "10000000") -> str:
     <recipient_identity_number>1234567890123457</recipient_identity_number>
     <recipient_name>PT IMPOR BPPU</recipient_name>
     <tax_type>PPh 23</tax_type>
-    <tax_object_code>24-100-01</tax_object_code>
+    <tax_object_code>24-101-01</tax_object_code>
     <tax_object_name>Sewa harta selain tanah/bangunan</tax_object_name>
     <tax_nature>non_final</tax_nature>
     <tax_facility>none</tax_facility>
@@ -128,7 +128,7 @@ def test_bppu_import_export_xml_round_trip(client: TestClient) -> None:
         headers=headers,
     )
     assert exported.status_code == 200
-    assert "<tax_object_code>24-100-01</tax_object_code>" in exported.text
+    assert "<tax_object_code>24-101-01</tax_object_code>" in exported.text
 
     bad = client.post(
         f"{BASE}/bppu/import-xml",

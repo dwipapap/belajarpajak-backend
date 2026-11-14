@@ -26,7 +26,7 @@ def _bp26_payload(class_id: int) -> dict:
         "recipient_identity_number": "9990000000000001",
         "recipient_name": "JOHN FOREIGN DOE",
         "tax_type": "PPh 26",
-        "tax_object_code": "27-100-01",
+        "tax_object_code": "27-100-99",
         "tax_object_name": "Dividen yang diterima WPLN",
         "tax_nature": "final",
         "tax_facility": "none",
@@ -57,7 +57,7 @@ def _import_xml(
     <recipient_identity_number>9990000000000002</recipient_identity_number>
     <recipient_name>JANE FOREIGN DOE</recipient_name>
     <tax_type>PPh 26</tax_type>
-    <tax_object_code>27-100-02</tax_object_code>
+    <tax_object_code>27-100-99</tax_object_code>
     <tax_object_name>Bunga yang diterima WPLN</tax_object_name>
     <tax_nature>{tax_nature}</tax_nature>
     <tax_facility>none</tax_facility>

@@ -54,6 +54,7 @@ from app.schemas.slip import (
     SlipSummary,
     SlipUpdate,
 )
+from app.services import objek_pajak as objek_service
 from app.services import ter as ter_service
 from app.services.audit import log_action
 from app.services.signing import require_kode_otorisasi
@@ -64,62 +65,6 @@ MAX_EXPORT_ROWS = 5_000
 
 #: Prefix that marks every generated number as simulated learning data.
 SIM_NUMBER_PREFIX = "SIM-"
-
-#: Learning matrix: kode objek → (rate_percent, kap_kjs). Only the codes students
-#: must recognise for SMK/kuliah practice; Coretax has dozens more.
-TAX_OBJECT_MATRIX: dict[str, dict[str, tuple[float, str]]] = {
-    SlipType.bp21.value: {
-        "21-100-01": (5.0, "411121-100"),
-        "21-100-02": (5.0, "411121-100"),
-        "21-100-09": (5.0, "411121-100"),
-        "21-401-01": (5.0, "411121-100"),
-        "21-401-02": (5.0, "411121-100"),
-        "21-499-99": (5.0, "411121-100"),
-    },
-    SlipType.bp23.value: {
-        "24-100-01": (15.0, "411124-100"),
-        "24-101-01": (15.0, "411124-102"),
-        "24-103-01": (15.0, "411124-103"),
-        "24-102-01": (2.0, "411124-104"),
-        "24-104-01": (2.0, "411124-104"),
-    },
-    SlipType.bp26.value: {
-        "27-100-01": (20.0, "411127-100"),
-        "27-100-02": (20.0, "411127-101"),
-        "27-100-03": (20.0, "411127-102"),
-        "27-100-04": (20.0, "411127-104"),
-        "27-100-05": (20.0, "411127-100"),
-    },
-    # Unifikasi minimal untuk belajar (subset PPh 23/26 + setor-sendiri/digunggung
-    # + PPh 4(2) konstruksi 28-100-01 dari rencana BPPU lokal).
-    SlipType.bppu.value: {
-        "24-100-01": (15.0, "411124-100"),
-        "24-102-01": (2.0, "411124-104"),
-        "24-104-01": (2.0, "411124-104"),
-        "28-100-01": (2.0, "411128-100"),
-    },
-    # BPMP bulanan = PPh 21 pegawai tetap: objek 21-* yang sama seperti BP21.
-    SlipType.bpmp.value: {
-        "21-100-01": (5.0, "411121-100"),
-        "21-100-02": (5.0, "411121-100"),
-        "21-100-09": (5.0, "411121-100"),
-        "21-401-01": (5.0, "411121-100"),
-        "21-401-02": (5.0, "411121-100"),
-        "21-499-99": (5.0, "411121-100"),
-    },
-    SlipType.bpnr.value: {
-        "27-100-01": (20.0, "411127-100"),
-        "27-100-04": (20.0, "411127-104"),
-    },
-    SlipType.sp.value: {
-        "24-100-01": (15.0, "411124-100"),
-        "24-102-01": (2.0, "411124-104"),
-    },
-    SlipType.cy.value: {
-        "24-100-01": (15.0, "411124-100"),
-        "27-100-01": (20.0, "411127-100"),
-    },
-}
 
 #: SIM-TER (disederhanakan untuk belajar, bukan tarif resmi).
 #: Kategori A: TK/0, TK/1, K/0 · B: TK/2, TK/3, K/1, K/2 · C: K/3.
@@ -163,8 +108,8 @@ def _validate_learning_fields(
     tarif_treaty_basis_points: int | None = None,
     ter_category: str | None = None,
     tax_month: int | None = None,
-) -> None:
-    """Educational validation mirroring Coretax rules (simplified for SMK/kuliah).
+) -> dict | None:
+    """Educational validation mirroring the reference portal rules (simplified for SMK/kuliah).
 
     Raises 422 with Indonesian messages so students learn the format, not just
     presence. BP23 without NPWP (16 zeros) is allowed and handled by the x2 rate.
@@ -201,20 +146,32 @@ def _validate_learning_fields(
             if not text.isdigit() or len(text) not in (15, 16):
                 _fail(f"{label} harus 15 atau 16 digit bila diisi.")
 
+    catalog_object = None
     if tax_object_code is not None:
-        matrix = TAX_OBJECT_MATRIX.get(slip_type.value, {})
-        expected = matrix.get(tax_object_code)
-        if expected is None:
-            allowed = ", ".join(sorted(matrix))
-            _fail(f"Kode objek {tax_object_code} belum dipelajari. Pilih: {allowed}.")
-        exp_rate, exp_kap = expected
-        if rate_percent is not None and abs(float(rate_percent) - exp_rate) > 1e-9:
-            _fail(f"Tarif untuk {tax_object_code} harus {exp_rate:g}%.")
-        if kap_kjs is not None and str(kap_kjs).strip() != "" and str(kap_kjs).strip() != exp_kap:
-            _fail(f"KAP-KJS untuk {tax_object_code} harus {exp_kap}.")
+        catalog_object = objek_service.get_object(slip_type.value, tax_object_code)
+        if catalog_object is None:
+            module = objek_service.module_for(slip_type.value) or slip_type.value.upper()
+            _fail(f"Kode objek {tax_object_code} tidak ada di katalog {module}.")
+        if kap_kjs is not None and str(kap_kjs).strip() not in ("", catalog_object["kap_kjs"]):
+            _fail(f"KAP-KJS untuk {tax_object_code} harus {catalog_object['kap_kjs']}.")
+        facility_value = tax_facility.value if tax_facility is not None else "none"
+        if rate_percent is not None and facility_value not in objek_service.NON_ENFORCED_FACILITIES:
+            exp_rate = objek_service.expected_rate(
+                catalog_object, objek_service.facility_code_for(facility_value)
+            )
+            if exp_rate is not None and abs(float(rate_percent) - exp_rate) > 1e-9:
+                _fail(f"Tarif untuk {tax_object_code} harus {exp_rate:g}%.")
 
     if tax_facility == SlipTaxFacility.skb and not (document_number or "").strip():
         _fail("Fasilitas SKB wajib mencantumkan nomor dokumen SKB.")
+    # SKD (facility "treaty") on BPNR/BP26: like the reference form, the student
+    # records the SKD receipt number and types the reduced rate into Tarif (%).
+    if (
+        tax_facility == SlipTaxFacility.treaty
+        and slip_type in (SlipType.bp26, SlipType.bpnr)
+        and not (nomor_skd or "").strip()
+    ):
+        _fail("Fasilitas SKD wajib mencantumkan Receipt Number.")
 
     treaty_used = tarif_treaty_basis_points is not None
     if treaty_used and not 0 <= tarif_treaty_basis_points <= 2000:
@@ -249,6 +206,9 @@ def _validate_learning_fields(
         and (ter_category is None or str(ter_category).strip() == "")
     ):
         _fail("Pilih kategori TER (A/B/C) untuk Masa Jan–Nov.")
+
+    return catalog_object
+
 
 #: Header aliases from the official converter (students may paste those names).
 #: Maps alias → internal field. Only the few students actually meet in class.
@@ -381,6 +341,12 @@ def _calculate_bp21_progressive_tax(
     return annual_tax // 12
 
 
+def _is_pasal_23_object(slip_type: SlipType, tax_object_code: str | None) -> bool:
+    """The no-NPWP double rate applies to Pasal 23 objects only."""
+    obj = objek_service.get_object(slip_type.value, tax_object_code or "")
+    return obj is not None and obj["pasal"] == "Pasal 23"
+
+
 def _resolve_income_tax(
     session: Session,
     *,
@@ -397,6 +363,7 @@ def _resolve_income_tax(
     recipient_identity_number: str | None,
     ter_category: str | None = None,
     tax_month: int | None = None,
+    tax_object_code: str | None = None,
 ) -> tuple[int, str]:
     if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
         return 0, "nol_skb"
@@ -448,7 +415,10 @@ def _resolve_income_tax(
         return _tax_by_basis_points(dpp, tarif_treaty_basis_points), "treaty"
 
     final_rate_basis_points = rate_basis_points
-    if slip_type in (SlipType.bp23, SlipType.bppu) and (
+    if (
+        slip_type in (SlipType.bp23, SlipType.bppu)
+        and _is_pasal_23_object(slip_type, tax_object_code)
+    ) and (
         not recipient_identity_number or recipient_identity_number.startswith("0000000000000000")
     ):
         final_rate_basis_points *= 2
@@ -456,6 +426,18 @@ def _resolve_income_tax(
 
     return calculate_income_tax(dpp, final_rate_basis_points, tax_facility), "flat"
 
+
+#: One official sample code per slip type for the XML import template.
+_SAMPLE_CODES = {
+    "bp21": "21-100-07",
+    "bp23": "24-101-01",
+    "bp26": "27-100-99",
+    "bppu": "24-101-01",
+    "bpmp": "21-100-01",
+    "bpnr": "27-101-01",
+    "sp": "28-419-01",
+    "cy": "28-419-01",
+}
 
 # --- shared access / lifecycle helpers ---------------------------------------
 
@@ -585,7 +567,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             raise HTTPException(status_code=422, detail="Dasar Pengenaan Pajak wajib diisi")
         if not direct_dpp and (data.gross_income is None or data.dpp_percent is None):
             raise HTTPException(status_code=422, detail="Penghasilan bruto dan persentase DPP wajib diisi")
-        _validate_learning_fields(
+        catalog_object = _validate_learning_fields(
             slip_type=slip_type,
             recipient_identity_number=data.recipient_identity_number,
             withholder_npwp=data.withholder_npwp,
@@ -636,8 +618,12 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             recipient_identity_number=data.recipient_identity_number,
             ter_category=data.ter_category,
             tax_month=data.tax_month,
+            tax_object_code=data.tax_object_code,
         )
         payload = data.model_dump(exclude={"class_id", "siswa_id", "dpp_percent", "rate_percent", "dpp"})
+        if catalog_object is not None:
+            payload["tax_object_name"] = catalog_object["nama"][:150]
+            payload["kap_kjs"] = catalog_object["kap_kjs"]
         if no_counterparty:
             for field in ("recipient_identity_number", "recipient_name", "recipient_address", "recipient_nitku"):
                 payload[field] = None
@@ -746,41 +732,16 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         """Download the XML import format expected by POST /{type}/import-xml."""
         example = ET.Element(f"{xml_tag}List")
         row = ET.SubElement(example, xml_tag)
-        if slip_type == SlipType.bp26:
-            sample_tax_type = "PPh 26"
-            sample_code = "27-100-01"
-            sample_name = "Dividen yang diterima WPLN"
-            sample_nature = "final"
-            sample_rate = "20"
-            sample_kap = "411127-100"
-        elif slip_type == SlipType.bp23:
-            sample_tax_type = "PPh 23"
-            sample_code = "24-100-01"
-            sample_name = "Dividen"
-            sample_nature = "non_final"
-            sample_rate = "15"
-            sample_kap = "411124-100"
-        elif slip_type in (SlipType.bppu, SlipType.sp, SlipType.cy):
-            sample_tax_type = "PPh 23"
-            sample_code = "24-100-01"
-            sample_name = "Dividen (Unifikasi simulasi)"
-            sample_nature = "non_final"
-            sample_rate = "15"
-            sample_kap = "411124-100"
-        elif slip_type == SlipType.bpnr:
-            sample_tax_type = "PPh 26"
-            sample_code = "27-100-01"
-            sample_name = "Dividen WPLN (BPNR simulasi)"
-            sample_nature = "final"
-            sample_rate = "20"
-            sample_kap = "411127-100"
-        else:
-            sample_tax_type = "PPh 21"
-            sample_code = "21-100-09"
-            sample_name = "Honorarium tenaga ahli"
-            sample_nature = "non_final"
-            sample_rate = "5"
-            sample_kap = "411121-100"
+        sample_code = _SAMPLE_CODES[slip_type.value]
+        sample_obj = objek_service.get_object(slip_type.value, sample_code)
+        sample_entry = objek_service.resolve_facility(sample_obj, "9")
+        sample_tax_type = sample_obj["pasal"].replace("Pasal 4 Ayat 2", "Pasal 4(2)").replace(
+            "Pasal", "PPh"
+        ).replace("PPh 4(2)", "PPh Final 4(2)")
+        sample_name = sample_obj["nama"]
+        sample_nature = "final" if (sample_obj["sifat"] or "").lower() == "final" else "non_final"
+        sample_rate = f"{sample_entry['tarif']:g}" if sample_entry.get("tarif") is not None else "5"
+        sample_kap = sample_obj["kap_kjs"]
         samples = {
             "class_id": "",
             "tax_month": "1",
@@ -1069,6 +1030,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         slip.class_id = resolved_class_id
         slip.siswa_id = resolved_siswa_id
 
+        if "tax_object_code" in payload and "kap_kjs" not in payload:
+            slip.kap_kjs = None  # re-derived from the catalog below
         if "rate_percent" in payload:
             slip.rate_basis_points = percent_to_basis_points(payload.pop("rate_percent"))
         if "dpp_percent" in payload:
@@ -1077,7 +1040,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             if field in {"class_id", "siswa_id"}:
                 continue
             setattr(slip, field, value)
-        _validate_learning_fields(
+        catalog_object = _validate_learning_fields(
             slip_type=slip_type,
             recipient_identity_number=slip.recipient_identity_number,
             withholder_npwp=slip.withholder_npwp,
@@ -1097,6 +1060,9 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             ter_category=slip.ter_category,
             tax_month=slip.tax_month,
         )
+        if catalog_object is not None:
+            slip.tax_object_name = catalog_object["nama"][:150]
+            slip.kap_kjs = catalog_object["kap_kjs"]
         slip.dpp = calculate_dpp(slip.gross_income, slip.dpp_rate_basis_points)
         income_tax, calculation_method = _resolve_income_tax(
             session,
@@ -1113,6 +1079,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             recipient_identity_number=slip.recipient_identity_number,
             ter_category=slip.ter_category,
             tax_month=slip.tax_month,
+            tax_object_code=slip.tax_object_code,
         )
         slip.income_tax = income_tax
         slip.calculation_method = calculation_method

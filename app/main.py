@@ -19,6 +19,7 @@ from app.routers import (
     deposit,
     dokumen_saya,
     pbk,
+    referensi,
     slips,
     tagihan,
     tarif_pajak,
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
         audit.router,
         tarif_pajak.router,
         dashboard.router,
+        referensi.router,
     ):
         app.include_router(router, prefix=API_PREFIX)
 

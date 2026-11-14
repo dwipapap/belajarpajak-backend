@@ -406,7 +406,7 @@ def test_superadmin_cannot_mutate_documents(client: TestClient):
             "tax_year": 2026,
             "recipient_identity_number": "1234567890123456",
             "recipient_name": "Coba Superadmin",
-            "tax_object_code": "24-100-01",
+            "tax_object_code": "24-101-01",
             "gross_income": 1_000_000,
             "dpp_percent": 100,
             "rate_percent": 15,
