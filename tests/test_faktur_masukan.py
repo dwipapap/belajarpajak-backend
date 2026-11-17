@@ -548,3 +548,26 @@ def test_spt_bagian_ii_counts_only_credited(client: TestClient):
     body = posted.json()
     assert body["masukan_ppn"] == credited["total_ppn"]
     assert body["masukan_dpp"] == credited["total_dpp"]
+
+
+def test_status_faktur_derived_and_filterable(client: TestClient):
+    headers = auth_headers(client, SISWA)
+    created = _create(client, headers)
+    assert created["status_faktur"] == "CREATED"
+
+    credited = client.post(f"/api/v1/faktur-masukan/{created['id']}/credit", headers=headers).json()
+    assert credited["status_faktur"] == "CREDITED"
+
+    other = _create(client, headers)
+
+    def _ids(*statuses: str) -> set[int]:
+        query = "&".join(f"status_faktur={s}" for s in statuses)
+        res = client.get(f"/api/v1/faktur-masukan?{query}&size=100", headers=headers)
+        assert res.status_code == 200, res.text
+        return {item["id"] for item in res.json()["items"]}
+
+    assert created["id"] in _ids("CREDITED")
+    assert other["id"] not in _ids("CREDITED")
+    assert other["id"] in _ids("CREATED", "APPROVED", "SAVED_INVALID")
+    assert created["id"] not in _ids("CREATED", "APPROVED", "SAVED_INVALID")
+    assert not _ids("AMENDED")

@@ -64,6 +64,13 @@ class WithholdingSlip(TimestampMixin, table=True):
     recipient_address: str | None = Field(default=None, max_length=255)
     recipient_nitku: str | None = Field(default=None, max_length=32)
 
+    #: BPNR foreign-recipient identity (all optional, other types leave them null).
+    recipient_country: str | None = Field(default=None, max_length=100)
+    recipient_birth_date: date | None = Field(default=None)
+    recipient_birth_place: str | None = Field(default=None, max_length=100)
+    recipient_passport_number: str | None = Field(default=None, max_length=40)
+    recipient_kitas_number: str | None = Field(default=None, max_length=40)
+
     ptkp_status: str | None = Field(default=None, max_length=10)
 
     #: SIM-TER category for learning (A/B/C). Only for BP21 Jan–Nov; December
@@ -107,6 +114,10 @@ class WithholdingSlip(TimestampMixin, table=True):
     document_number: str | None = Field(default=None, max_length=60)
     document_date: date | None = Field(default=None)
     document_nitku: str | None = Field(default=None, max_length=32)
+
+    #: Metode Pembayaran / Nomor SP2D (BPNR; SP2D only for government payers).
+    payment_method: str | None = Field(default=None, max_length=40)
+    sp2d_number: str | None = Field(default=None, max_length=60)
 
     score: int | None = Field(default=None, ge=0, le=100)
     teacher_feedback: str | None = Field(default=None, max_length=500)

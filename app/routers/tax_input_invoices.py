@@ -61,6 +61,11 @@ from app.services.faktur_masukan import (
     build_input_line_from_source,
     list_source_lines,
 )
+from app.services.faktur_status import (
+    StatusFaktur,
+    masukan_status_condition,
+    masukan_status_faktur,
+)
 
 LABEL = "Faktur Pajak Masukan"
 MAX_EXPORT_ROWS = 5_000
@@ -249,6 +254,7 @@ def invoice_to_read(session: Session, invoice: TaxInputInvoice) -> TaxInputRead:
     return TaxInputRead.model_validate(
         {
             **invoice.model_dump(),
+            "status_faktur": masukan_status_faktur(invoice),
             "lines": [line_to_read(line) for line in _input_lines(session, invoice.id)],
         }
     )
@@ -361,6 +367,7 @@ def _sanitize_csv_value(value: str) -> str:
 def _input_conditions(
     *,
     status: TaxInvoiceStatus | None = None,
+    status_faktur: list[StatusFaktur] | None = None,
     credit_status: TaxInputCreditStatus | None = None,
     tenant_id: int | None = None,
     class_id: int | None = None,
@@ -377,6 +384,8 @@ def _input_conditions(
     conditions = []
     if status is not None:
         conditions.append(TaxInputInvoice.status == status)
+    if status_faktur:
+        conditions.append(masukan_status_condition(TaxInputInvoice, status_faktur))
     if credit_status is not None:
         conditions.append(TaxInputInvoice.credit_status == credit_status)
     if origin is not None:
@@ -410,6 +419,7 @@ def list_input_invoices(
     current_user: CurrentUser,
     session: SessionDep,
     status_filter: Annotated[TaxInvoiceStatus | None, Query(alias="status")] = None,
+    status_faktur: Annotated[list[StatusFaktur] | None, Query()] = None,
     credit_status: TaxInputCreditStatus | None = None,
     tenant_id: int | None = None,
     class_id: int | None = None,
@@ -426,6 +436,7 @@ def list_input_invoices(
 ) -> TaxInputListResponse:
     conditions = _input_conditions(
         status=status_filter,
+        status_faktur=status_faktur,
         credit_status=credit_status,
         tenant_id=tenant_id,
         class_id=class_id,

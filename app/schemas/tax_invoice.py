@@ -20,6 +20,7 @@ from app.models.enums import (
     TaxInvoiceLineType,
     TaxInvoiceStatus,
 )
+from app.services.faktur_status import StatusFaktur
 
 TRANSACTION_CODES = (
     "01",
@@ -187,6 +188,8 @@ class TaxInvoiceRead(BaseModel):
     created_by_id: int
 
     status: TaxInvoiceStatus
+    #: Derived display status, see app/services/faktur_status.py.
+    status_faktur: StatusFaktur
     invoice_number: str | None
     issued_at: datetime | None
     invalid_reason: str | None

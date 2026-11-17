@@ -56,6 +56,11 @@ from app.schemas.tax_invoice import (
 )
 from app.services.audit import log_action
 from app.services.faktur_masukan import create_prepopulated_input
+from app.services.faktur_status import (
+    StatusFaktur,
+    keluaran_status_condition,
+    keluaran_status_faktur,
+)
 from app.services.signing import require_kode_otorisasi
 
 LABEL = "Faktur Pajak Keluaran"
@@ -261,6 +266,7 @@ def invoice_to_read(session: Session, invoice: TaxInvoice) -> TaxInvoiceRead:
     return TaxInvoiceRead.model_validate(
         {
             **invoice.model_dump(),
+            "status_faktur": keluaran_status_faktur(invoice),
             "lines": [line_to_read(line) for line in _invoice_lines(session, invoice.id)],
         }
     )
@@ -445,6 +451,7 @@ def _sanitize_csv_value(value: str) -> str:
 def _invoice_conditions(
     *,
     status: TaxInvoiceStatus | None = None,
+    status_faktur: list[StatusFaktur] | None = None,
     tenant_id: int | None = None,
     class_id: int | None = None,
     siswa_id: int | None = None,
@@ -463,6 +470,8 @@ def _invoice_conditions(
     conditions = []
     if status is not None:
         conditions.append(TaxInvoice.status == status)
+    if status_faktur:
+        conditions.append(keluaran_status_condition(TaxInvoice, status_faktur))
     if tax_year is not None:
         conditions.append(TaxInvoice.tax_year == tax_year)
     if tax_month is not None:
@@ -494,6 +503,7 @@ def list_invoices(
     current_user: CurrentUser,
     session: SessionDep,
     status_filter: Annotated[TaxInvoiceStatus | None, Query(alias="status")] = None,
+    status_faktur: Annotated[list[StatusFaktur] | None, Query()] = None,
     tenant_id: int | None = None,
     class_id: int | None = None,
     siswa_id: int | None = None,
@@ -507,6 +517,7 @@ def list_invoices(
 ) -> TaxInvoiceListResponse:
     conditions = _invoice_conditions(
         status=status_filter,
+        status_faktur=status_faktur,
         tenant_id=tenant_id,
         class_id=class_id,
         siswa_id=siswa_id,

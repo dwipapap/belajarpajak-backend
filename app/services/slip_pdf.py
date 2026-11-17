@@ -209,6 +209,20 @@ def render_slip_pdf(slip: WithholdingSlip, label: str, tenant_name: str | None =
         sheet.label_row(
             "A.3", "NOMOR IDENTITAS TEMPAT KEGIATAN USAHA (NITKU)", nitku_a, 28, 160, 172
         )
+        if stype == SlipType.bpnr.value:
+            sheet.label_row("A.4", "NEGARA", or_dash(slip.recipient_country), 28, 160, 172)
+            sheet.label_row(
+                "A.5", "TANGGAL LAHIR", fmt_date(slip.recipient_birth_date), 28, 160, 172
+            )
+            sheet.label_row(
+                "A.6", "TEMPAT LAHIR", or_dash(slip.recipient_birth_place), 28, 160, 172
+            )
+            sheet.label_row(
+                "A.7", "NOMOR PASPOR", or_dash(slip.recipient_passport_number), 28, 160, 172
+            )
+            sheet.label_row(
+                "A.8", "NOMOR KITAS/KITAP", or_dash(slip.recipient_kitas_number), 28, 160, 172
+            )
         sheet.section_bar("B. PEMOTONGAN DAN/ATAU PEMUNGUTAN PPh")
         sheet.free_row("B.1", f"Jenis Fasilitas : {_FACILITY.get(slip.tax_facility, '-')}", 28)
         sheet.free_row("B.2", f"Jenis PPh : {_pph_kind(slip)}", 28)
@@ -235,7 +249,20 @@ def render_slip_pdf(slip: WithholdingSlip, label: str, tenant_name: str | None =
         lab = (28, 200, 212)
         _doc_rows_unif(sheet, slip)
         sheet.free_row("B.10", "Untuk Instansi Pemerintah, Pembayaran PPh Menggunakan :", 28)
-        sheet.label_row("B.11", "Nomor SP2D", " ", 168, 290, 300, pad=5)
+        if stype == SlipType.bpnr.value:
+            sheet.label_row(
+                "B.10a",
+                "Tingkat Penghasilan Neto yang Dianggap (%)",
+                fmt_percent(slip.dpp_rate_basis_points),
+                28,
+                168,
+                300,
+                pad=3,
+            )
+            sheet.label_row(
+                "B.10b", "Metode Pembayaran", or_dash(slip.payment_method), 28, 168, 300, pad=3
+            )
+        sheet.label_row("B.11", "Nomor SP2D", or_dash(slip.sp2d_number), 168, 290, 300, pad=5)
         sheet.section_bar("C. IDENTITAS PEMOTONG DAN/ATAU PEMUNGUT PPh")
         lab = (28, 245, 257)
         sheet.label_row("C.1", "NPWP / NIK", or_dash(slip.withholder_npwp), *lab, pad=3)

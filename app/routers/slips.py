@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from typing import Annotated
@@ -88,6 +89,10 @@ def _calculate_ter_tax(gross_income: int, ter_category: str | None) -> int | Non
     return None
 
 
+#: BPNR recipients are foreign taxpayers: free TIN, alphanumeric plus - / .
+FOREIGN_TIN_RE = re.compile(r"[A-Za-z0-9\-/.]+")
+
+
 def _validate_learning_fields(
     *,
     slip_type: SlipType,
@@ -126,7 +131,14 @@ def _validate_learning_fields(
         if slip_type in (SlipType.bp21, SlipType.bppu, SlipType.sp, SlipType.cy):
             if not ident.isdigit() or len(ident) != 16:
                 _fail("Nomor identitas penerima harus 16 digit (NPWP 16 / NIK).")
-        elif slip_type in (SlipType.bp26, SlipType.bpnr):
+        elif slip_type == SlipType.bpnr:
+            if not ident:
+                _fail("Nomor identitas penerima wajib diisi (TIN negara asal).")
+            if len(ident) > 30 or not FOREIGN_TIN_RE.fullmatch(ident):
+                _fail(
+                    "TIN asing harus 1–30 karakter: huruf, angka, atau tanda - / ."
+                )
+        elif slip_type == SlipType.bp26:
             if not ident:
                 _fail("Nomor identitas penerima wajib diisi (TIN / paspor).")
 
@@ -240,6 +252,11 @@ _IMPORT_FIELDS = (
     "recipient_name",
     "recipient_address",
     "recipient_nitku",
+    "recipient_country",
+    "recipient_birth_date",
+    "recipient_birth_place",
+    "recipient_passport_number",
+    "recipient_kitas_number",
     "ptkp_status",
     "ter_category",
     "tax_type",
@@ -261,6 +278,8 @@ _IMPORT_FIELDS = (
     "document_number",
     "document_date",
     "document_nitku",
+    "payment_method",
+    "sp2d_number",
 )
 
 _CSV_COLUMNS = (
