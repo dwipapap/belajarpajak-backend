@@ -223,13 +223,13 @@ def select_ppn_masukan(session: Session, tax_return: TaxReturn) -> list[TaxInput
 def select_pph_slips(session: Session, tax_return: TaxReturn) -> list[WithholdingSlip]:
     """Issued withholding slips of the SPT period — the Induk B source set.
 
-    PPh unifikasi aggregates BP23/BP26/BPPU; SPT PPh 21/26 aggregates the
+    PPh unifikasi aggregates BPPU/BP26; SPT PPh 21/26 aggregates the
     monthly-slip set (BPMP/BP26/BP21).
     """
     if _is_pph21_26(tax_return.return_type):
         source_types = PPh_21_26_SOURCE_TYPES
     else:
-        source_types = (SlipType.bp23, SlipType.bp26, SlipType.bppu)
+        source_types = (SlipType.bppu, SlipType.bp26, SlipType.bp23)  # bp23: legacy rows only
     return list(
         session.exec(
             select(WithholdingSlip).where(
@@ -400,7 +400,7 @@ def _slip_pasal(slip: WithholdingSlip) -> str:
     mapped = kjs.pasal_for_kjs(slip.kap_kjs or "")
     if mapped:
         return mapped
-    if slip.slip_type == SlipType.bp23:
+    if slip.slip_type in (SlipType.bppu, SlipType.bp23):
         return "pasal_23"
     if slip.slip_type == SlipType.bpmp:
         return "pasal_21"

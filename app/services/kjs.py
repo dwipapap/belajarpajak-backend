@@ -40,7 +40,7 @@ KJS_PPN_MASA = "411211-100"
 #: Fallback KJS for a BPMP slip that carries no kap_kjs (PPh 21 masa default).
 KJS_BPMP_DEFAULT = "411121-100"
 
-#: Fallback KJS for a BP23 slip that carries no kap_kjs (jasa default).
+#: Fallback KJS for a BPPU (Pasal 23) slip that carries no kap_kjs (jasa default).
 KJS_BP23_DEFAULT = "411124-100"
 #: KJS for BP26 (luar negeri) slips.
 KJS_BP26_DEFAULT = "411127-110"

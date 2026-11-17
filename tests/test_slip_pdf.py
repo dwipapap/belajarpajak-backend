@@ -14,7 +14,6 @@ from app.services.slip_pdf import render_slip_pdf
 
 TITLES = {
     "bp21": ("BP21", "PASAL 21"),
-    "bp23": ("BPPU", "UNIFIKASI"),
     "bp26": ("BP26", "PASAL 26"),
     "bppu": ("BPPU", "UNIFIKASI"),
     "bpmp": ("BPMP", "BULANAN"),

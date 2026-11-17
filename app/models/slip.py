@@ -1,6 +1,6 @@
 """Simulated e-Bupot withholding slip model — one table for all form types.
 
-BP21 (PPh 21), BP23 (PPh 23) and BP26 (PPh 26) share
+BP21 (PPh 21) and BP26 (PPh 26) share
 the same simulated slip structure and lifecycle; they differ only in
 data values (recipient identity, rates, final vs non-final). ``slip_type`` is a
 plain discriminator — every column is usable by every type.

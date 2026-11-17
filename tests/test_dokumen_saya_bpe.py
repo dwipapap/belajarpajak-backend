@@ -17,8 +17,8 @@ from tests.test_spt import (
     OTHER_SISWA,
     SISWA,
     _create_spt,
-    _make_bp23_issued,
     _make_keluaran_issued,
+    _make_pph23_issued,
     _pernyataan,
     _posting,
     _submit,
@@ -149,7 +149,7 @@ def test_dokumen_saya_lists_and_scopes(client: TestClient):
     assert reported["status"] == "reported"
     owner_bpe = reported["bpe_number"]
 
-    slip = _make_bp23_issued(client, auth_headers(client, SISWA), 6)
+    slip = _make_pph23_issued(client, auth_headers(client, SISWA), 6)
 
     mine = auth_headers(client, SISWA)
     res = client.get(f"{BASE}/dokumen-saya", headers=mine)
@@ -168,7 +168,7 @@ def test_dokumen_saya_lists_and_scopes(client: TestClient):
         f"{BASE}/dokumen-saya", params={"jenis": "bukti_potong"}, headers=mine
     ).json()
     assert any(
-        row["download_path"] == f"/api/v1/bp23/{slip['id']}/pdf" for row in slips["items"]
+        row["download_path"] == f"/api/v1/bppu/{slip['id']}/pdf" for row in slips["items"]
     )
 
     billings = client.get(

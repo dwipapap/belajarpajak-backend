@@ -1,6 +1,6 @@
 """Schemas for simulated e-Bupot withholding slip workflows (all slip types).
 
-One shared field set: BP21, BP23 and BP26 forms are structurally identical here,
+One shared field set: BP21 and BP26 forms are structurally identical here,
 so all endpoints accept and return every field; a field the form doesn't use is
 simply null. Numbers are prefixed SIM- to mark simulated learning data.
 """

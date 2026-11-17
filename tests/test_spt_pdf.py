@@ -15,8 +15,8 @@ from tests.test_spt import (
     OTHER_SISWA,
     SISWA,
     _create_spt,
-    _make_bp23_issued,
     _make_keluaran_issued,
+    _make_pph23_issued,
     _pernyataan,
     _posting,
 )
@@ -82,8 +82,8 @@ def test_spt_ppn_pdf(client: TestClient, tmp_path):
 
 def test_spt_pph_unifikasi_pdf(client: TestClient, tmp_path):
     headers = auth_headers(client, SISWA)
-    # bp23 helper issues in 2026; the SPT only needs a posted snapshot of its own period.
-    _make_bp23_issued(client, headers, 2)
+    # pph23 helper issues in 2026; the SPT only needs a posted snapshot of its own period.
+    _make_pph23_issued(client, headers, 2)
     spt = _create_spt(client, headers, 2, return_type="pph_unifikasi", year=YEAR)
     _posting(client, headers, spt["id"])
 

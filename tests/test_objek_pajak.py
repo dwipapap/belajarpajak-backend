@@ -10,7 +10,7 @@ from tests.conftest import auth_headers
 
 SISWA = "siswa1@smkn1-pku.local"
 BASE = "/api/v1"
-SLIP_TYPES = ["bppu", "bp23", "sp", "cy", "bp21", "bp26", "bpnr", "bpmp"]
+SLIP_TYPES = ["bppu", "sp", "cy", "bp21", "bp26", "bpnr", "bpmp"]
 
 
 def _class_id(client: TestClient, headers: dict[str, str]) -> int:
@@ -52,8 +52,6 @@ def test_endpoint_returns_catalog_for_each_module(client: TestClient, slip_type:
         "pph_manual",
     }
     assert len(rows) == len(objek_pajak.list_objects(slip_type))
-    if slip_type == "bp23":
-        assert {r["pasal"] for r in rows} == {"Pasal 23"}
 
 
 def test_endpoint_requires_auth_and_resolves_facility(client: TestClient) -> None:
@@ -75,7 +73,6 @@ def test_official_codes_not_fake_ones() -> None:
     assert objek_pajak.get_object("bppu", "24-101-01")["nama"] == "Dividen"
     assert objek_pajak.get_object("bppu", "24-100-01")["nama"].startswith("Hadiah")
     assert objek_pajak.get_object("bppu", "28-100-01") is None
-    assert objek_pajak.get_object("bp23", "28-409-10") is None  # bp23 is Pasal 23 only
 
 
 def test_invalid_code_rejected(client: TestClient) -> None:
@@ -163,8 +160,9 @@ def test_update_resets_name_and_kap_from_catalog(client: TestClient) -> None:
 
 
 def test_remap_targets_exist_and_chain_is_safe() -> None:
-    assert set(objek_pajak_remap.REMAP) == set(SLIP_TYPES)
-    for slip_type in SLIP_TYPES:
+    # bp23 is a legacy slip type kept only so migration e011 can remap old rows.
+    assert set(objek_pajak_remap.REMAP) == set(SLIP_TYPES) | {"bp23"}
+    for slip_type in [*SLIP_TYPES, "bp23"]:
         rows = objek_pajak_remap.remap_rows(slip_type)  # raises if a target is missing
         assert len(rows) == len(objek_pajak_remap.REMAP[slip_type])
     # 24-100-01 -> 24-101-01 while 24-101-01 -> 24-102-01: each old code maps once.

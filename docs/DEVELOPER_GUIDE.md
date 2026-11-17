@@ -20,7 +20,7 @@ pada *apa isinya dan mengapa dibuat begitu*.
 8. [Enumerasi](#8-enumerasi)
 9. [Model RBAC & Multi-Tenancy](#9-model-rbac--multi-tenancy)
 10. [Referensi API Lengkap](#10-referensi-api-lengkap)
-11. [Modul e-Bupot (BP21 / BP23 / BP26)](#11-modul-e-bupot-bp21--bp23--bp26)
+11. [Modul e-Bupot (BP21 / BP26 / BPPU)](#11-modul-e-bupot-bp21--bp26--bppu)
 12. [Mesin Perhitungan Pajak](#12-mesin-perhitungan-pajak)
 13. [Import / Export](#13-import--export)
 14. [Migrasi Database (Alembic)](#14-migrasi-database-alembic)
@@ -53,7 +53,7 @@ berjalan di port 3000.
 
 > Status dokumen: diperbarui sebagian 2026-11-01 (backend `8b62bc6`). Bagian 7, 8, 10, 19, Lampiran, dan A sudah memuat
 > BPMP/A1/A2, periode instansi, dan modul pembayaran lanjutan. Tabel kolom rinci di §7 dan contoh di §11–13 masih ditulis untuk
-> BP21/BP23/BP26, tetapi polanya berlaku sama untuk semua jenis slip.
+> BP21/BP26/BPPU, tetapi polanya berlaku sama untuk semua jenis slip.
 
 ---
 
@@ -99,7 +99,7 @@ backend/
 │   │   ├── base.py               # TimestampMixin (created_at/updated_at)
 │   │   ├── enums.py              # semua StrEnum bersama
 │   │   ├── tenant.py, user.py, school_class.py, enrollment.py
-│   │   ├── slip.py               # WithholdingSlip (satu tabel untuk BP21/BP23/BP26)
+│   │   ├── slip.py               # WithholdingSlip (satu tabel untuk BP21/BP26/BPPU)
 │   │   ├── tax_invoice.py        # TaxInvoice + TaxInvoiceLine (Faktur Keluaran)
 │   │   ├── tax_input_invoice.py  # TaxInputInvoice + TaxInputLine (Faktur Masukan)
 │   │   ├── tax_return.py         # TaxReturn + TaxReturnLine (SPT Masa)
@@ -112,7 +112,7 @@ backend/
 │   │   ├── tax_invoice.py, tax_input_invoice.py, tax_return.py, billing.py, audit.py
 │   └── routers/
 │       ├── auth.py, tenants.py, users.py, classes.py
-│       ├── slips.py              # factory make_slip_router() → bp21_router, bp23_router, bp26_router
+│       ├── slips.py              # factory make_slip_router() → bp21_router, bp26_router, bppu_router
 │       ├── tax_invoices.py       # /faktur-keluaran + line CRUD
 │       ├── tax_input_invoices.py # /faktur-masukan + credit/uncredit/bulk
 │       ├── tax_returns.py        # /spt (posting/pernyataan/submit/pembetulan/billing/review)
@@ -178,7 +178,7 @@ Alur `create_app()`:
 2. Buat `FastAPI(title="Simulator Pajak — API", version="0.1.0", lifespan=lifespan)`.
 3. Pasang `CORSMiddleware` (`allow_credentials=True`, semua metode & header).
 4. Daftarkan router dengan prefix `/api/v1`:
-   `auth`, `tenants`, `users`, `classes`, `bp21`, `bp23`, `bp26`,
+   `auth`, `tenants`, `users`, `classes`, `bp21`, `bp26`, `bppu`,
    `faktur-keluaran`, `faktur-masukan`, `spt`, `billings`, `audit-logs`,
    `tarif_pajak`, `dashboard`.
 5. Endpoint `GET /health` (di luar prefix) → `{"status": "ok"}`, tag `meta`.
@@ -308,7 +308,7 @@ Constraint `uq_enrollments_class_siswa` — unik `(class_id, siswa_id)`.
 
 ### `withholding_slips` (model `WithholdingSlip`)
 
-**Satu tabel untuk semua jenis bupot.** BP21 (PPh 21), BP23 (PPh 23), dan BP26
+**Satu tabel untuk semua jenis bupot.** BP21 (PPh 21), BPPU (termasuk PPh 23), dan BP26
 (PPh 26) berbagi struktur & siklus hidup yang identik; ketiganya
 hanya berbeda pada *nilai data*. Kolom `slip_type` murni diskriminator — semua kolom bisa
 dipakai semua tipe.
@@ -318,7 +318,7 @@ dipakai semua tipe.
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | PK | |
-| `slip_type` | enum `slip_type`, index | `bp21` \| `bp23` \| `bp26` \| `bppu` \| `bpmp` \| `bpnr` \| `sp` \| `cy` |
+| `slip_type` | enum `slip_type`, index | `bp21` \| `bp26` \| `bppu` \| `bpmp` \| `bpnr` \| `sp` \| `cy` | (`bp23` = legacy, sudah dilebur ke `bppu`)
 | `tenant_id` | FK → tenants, `CASCADE`, index | |
 | `class_id` | FK → classes, `SET NULL`, nullable, index | |
 | `siswa_id` | FK → users, `CASCADE`, index | Pemilik dokumen |
@@ -429,7 +429,7 @@ disimpan sebagai enum native PostgreSQL).
 |---|---|---|
 | `TenantType` | `tenant_type` | `smk`, `kampus`, `lembaga`, `pt` |
 | `Role` | `user_role` | `superadmin`, `admin`, `guru`, `siswa` |
-| `SlipType` | `slip_type` | `bp21`, `bp23`, `bp26`, `bppu`, `bpmp`, `bpnr`, `sp`, `cy` |
+| `SlipType` | `slip_type` | `bp21`, `bp26`, `bppu`, `bppu`, `bpmp`, `bpnr`, `sp`, `cy` |
 | `SlipStatus` | `slip_status` | `draft`, `issued`, `invalid` |
 | `SlipTaxNature` | `slip_tax_nature` | `final`, `non_final` |
 | `SlipTaxFacility` | `slip_tax_facility` | `none`, `dtp`, `skb`, `rate_0` |
@@ -617,27 +617,26 @@ Validasi bracket (`_validate_bracket`):
   → **409**. `batas_atas = NULL` diperlakukan sebagai `10**30` untuk pemeriksaan overlap.
 - Bracket non-aktif dilewati pemeriksaan overlap.
 
-### BP21 / BP23 / BP26
+### BP21 / BP26 / BPPU
 
 Lihat §11 — set endpoint identik, ketiganya dibangun dari factory yang sama. Detail
 faktur/SPT/billing/audit: lihat Lampiran A.
 
 ---
 
-## 11. Modul e-Bupot (BP21 / BP23 / BP26)
+## 11. Modul e-Bupot (BP21 / BP26 / BPPU)
 
 `app/routers/slips.py` mendefinisikan `make_slip_router(slip_type, label)` yang menghasilkan
 set endpoint lengkap untuk satu jenis bupot. Di akhir file:
 
 ```python
 bp21_router = make_slip_router(SlipType.bp21, "BP21")
-bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
 ```
 
 Menambah jenis bupot baru (mis. BPPU/BPNR) = satu nilai enum + satu pemanggilan factory (+ migrasi enum).
 
-### Daftar endpoint (`{t}` = `bp21`, `bp23`, atau `bp26`)
+### Daftar endpoint (`{t}` = `bp21`, `bp26`, atau `bppu`)
 
 | Metode | Path | Peran | Keterangan |
 |---|---|---|---|
@@ -772,7 +771,7 @@ Urutan prioritas (Fase 2 mengembalikan `(pajak, metode)` dan menyimpan `calculat
    Bila berhasil, hasilnya dipakai.
 4. **BP26 + `non_final` + `negara_treaty` terisi + `tarif_treaty_basis_points` terisi**
    → `dpp × tarif_treaty_bp / 10000` (`treaty`).
-5. **BP23 tanpa NPWP (16 nol) → tarif ×2** (`flat_x2`), selain itu **fallback** → `dpp × rate_bp / 10000` (`flat`).
+5. **BPPU objek Pasal 23 tanpa NPWP (16 nol) → tarif ×2** (`flat_x2`), selain itu **fallback** → `dpp × rate_bp / 10000` (`flat`).
 
 > Fasilitas `dtp` dan `none` **tidak** mengubah perhitungan saat ini (`dtp` hanya penanda).
 
@@ -865,7 +864,7 @@ bulanan    = 325.000
 Mengembalikan file XML contoh (`Content-Disposition: attachment`) berisi satu elemen baris
 dengan nilai contoh yang berbeda per jenis:
 
-| Field | BP21 | BP23 | BP26 |
+| Field | BP21 | BPPU | BP26 |
 |---|---|---|---|
 | `tax_type` | `PPh 21` | `PPh 23` | `PPh 26` |
 | `tax_object_code` | `21-100-01` | `23-100-01` | `27-100-01` |
@@ -894,7 +893,7 @@ Multipart, field `file`. Struktur yang diterima:
 </Bp21List>
 ```
 
-Nama elemen root/baris: `Bp21List`/`Bp21`, `Bp23List`/`Bp23`, `Bp26List`/`Bp26` (dari `label.capitalize()`).
+Nama elemen root/baris: `Bp21List`/`Bp21`, `BppuList`/`Bppu`, `Bp26List`/`Bp26` (dari `label.capitalize()`).
 
 Perilaku:
 
@@ -1130,10 +1129,10 @@ Lint: `uv run ruff check .`
 6. Daftarkan router di `app/main.py`.
 7. Tulis tes yang setidaknya menguji: happy path, penolakan lintas tenant, dan penolakan peran.
 
-### Menambah jenis bupot baru (mis. BPPU — BP23 sudah ada sebagai contoh)
+### Menambah jenis bupot baru (mis. BPPU — BPPU sudah ada sebagai contoh)
 
-BP23 sudah terdaftar (`bp23_router = make_slip_router(SlipType.bp23, "BP23")` di `slips.py`
-+ `bp23 = "bp23"` di `SlipType`). Untuk varian berikutnya (mis. BPPU/BPNR):
+BPPU sudah terdaftar (`bppu_router = make_slip_router(SlipType.bppu, "BPPU")` di `slips.py`
++ `bppu = "bppu"` di `SlipType`). Untuk varian berikutnya (mis. BPPU/BPNR):
 
 1. Tambah `bppu = "bppu"` di `SlipType`.
 2. Tulis migrasi manual: `ALTER TYPE slip_type ADD VALUE 'bppu'`.
@@ -1159,7 +1158,7 @@ Tambahkan tahun ke `TARIF_YEARS` di `app/seed.py`, atau isi lewat endpoint
 |---|---|---|
 | bcrypt di-pin `<4.1` | Sengaja | passlib 1.7.4 membaca `bcrypt.__about__.__version__` yang dihapus di 4.1+. Hashing tetap jalan tanpa pin, tapi ada warning berisik saat startup |
 | `str` alih-alih `EmailStr` | Sengaja | `email-validator` menolak TLD cadangan seperti `.local` yang dipakai akun seed non-routable. Divalidasi dengan pola ringan |
-| Satu tabel `withholding_slips` | Sengaja | BP21/BP23/BP26 identik secara struktural; diskriminator `slip_type` jauh lebih murah daripada tiga tabel + tiga router |
+| Satu tabel `withholding_slips` | Sengaja | BP21/BP26/BPPU identik secara struktural; diskriminator `slip_type` jauh lebih murah daripada tiga tabel + tiga router |
 | `CORS_ORIGINS` sebagai `str` | Sengaja | Mencegah pydantic-settings mencoba JSON-decode nilai dari `.env` |
 | 404 untuk resource tak berhak | Sengaja | Tidak membocorkan keberadaan dokumen milik tenant/siswa lain |
 | Basis points untuk persen | Sengaja | Menjaga aritmatika rupiah tetap integer & eksak |
@@ -1193,7 +1192,7 @@ Tambahkan tahun ke `TARIF_YEARS` di `app/seed.py`, atau isi lewat endpoint
 
 ### Peta jalan yang direncanakan
 
-**Sudah done:** e-Bupot BP21/BP23/BP26/BPPU/BPMP/BPNR/SP/CY + A1/A2, TER penuh, e-Faktur Keluaran/Masukan,
+**Sudah done:** e-Bupot BP21/BP26/BPPU/BPPU/BPMP/BPNR/SP/CY + A1/A2, TER penuh, e-Faktur Keluaran/Masukan,
 SPT Masa PPN + PPh Unifikasi + PPh 21/26, kode billing (NTPN/kanal/multi-detail) + pay + PDF, billing mandiri,
 deposit, pemindahbukuan, tagihan, angsuran, periode instansi + dossier, audit trail, penilaian per-dokumen.
 
@@ -1245,7 +1244,7 @@ POST   /api/v1/tarif-pajak/progresif
 PATCH  /api/v1/tarif-pajak/progresif/{bracket_id}
 DELETE /api/v1/tarif-pajak/progresif/{bracket_id}
 
-# {t} ∈ {bp21, bp23, bp26, bppu, bpmp, bpnr, sp, cy}
+# {t} ∈ {bp21, bp26, bppu, bpmp, bpnr, sp, cy}
 GET    /api/v1/{t}
 GET    /api/v1/{t}/summary
 GET    /api/v1/{t}/import-template

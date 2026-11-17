@@ -3,7 +3,7 @@
 Both e-Bupot slips and e-Faktur invoices belong to a (tenant, class, siswa)
 triple and are written by siswa, guru, or admin on a siswa's behalf. The rules
 for who may write what are identical, so they live here rather than being
-copied per module. ``label`` only shapes the error message ("BP23", "Faktur
+copied per module. ``label`` only shapes the error message ("BP21", "Faktur
 Pajak Keluaran") — the logic is the same for every document type.
 """
 

@@ -1,7 +1,7 @@
 """SPT Masa PPN + PPh Unifikasi workflow tests.
 
 Fixture helpers build issued faktur keluaran, credited faktur masukan, and
-issued bp23 slips for dedicated periods away from the July 2026 seed data.
+issued BPPU (Pasal 23) slips for dedicated periods away from the July 2026 seed data.
 Because an SPT is unique per (tenant, type, period), every test owns its own
 month — the map lives in the comments next to each test.
 """
@@ -101,11 +101,11 @@ def _make_masukan_credited(
     return credit.json()
 
 
-def _make_bp23_issued(
+def _make_pph23_issued(
     client: TestClient, headers: dict, month: int, gross: int = 10_000_000
 ) -> dict:
     res = client.post(
-        f"{BASE}/bp23",
+        f"{BASE}/bppu",
         json={
             "tax_month": month,
             "tax_year": 2026,
@@ -121,7 +121,7 @@ def _make_bp23_issued(
     assert res.status_code == 201, res.text
     created = res.json()
     issued = client.post(
-        f"{BASE}/bp23/{created['id']}/issue",
+        f"{BASE}/bppu/{created['id']}/issue",
         headers=headers,
         json={"kode_otorisasi": "KO-SIM-123"},
     )
@@ -478,10 +478,10 @@ def test_siswa_cannot_access_another_siswa_spt(client: TestClient):
 # --- PPh Unifikasi tests ------------------------------------------------------
 
 
-def test_pph_posting_aggregates_bp23(client: TestClient):
+def test_pph_posting_aggregates_bppu_pph23(client: TestClient):
     """Period 2026-02, PPh Unifikasi (separate uniqueness from PPN)."""
     headers = auth_headers(client, SISWA)
-    slip = _make_bp23_issued(client, headers, 2, gross=10_000_000)
+    slip = _make_pph23_issued(client, headers, 2, gross=10_000_000)
     assert slip["income_tax"] == 1_500_000
 
     spt = _create_spt(client, headers, 2, return_type="pph_unifikasi")
@@ -500,7 +500,7 @@ def test_pph_posting_aggregates_bp23(client: TestClient):
 def test_pph_submit_creates_billing_with_pasal_kjs(client: TestClient):
     """Period 2026-03, PPh Unifikasi."""
     headers = auth_headers(client, SISWA)
-    _make_bp23_issued(client, headers, 3, gross=4_000_000)
+    _make_pph23_issued(client, headers, 3, gross=4_000_000)
     spt = _create_spt(client, headers, 3, return_type="pph_unifikasi")
     _posting(client, headers, spt["id"])
     _pernyataan(client, headers, spt["id"])
@@ -660,7 +660,7 @@ def test_lampiran_ppn_matches_induk(client: TestClient):
 def test_lampiran_unifikasi_matches_induk(client: TestClient):
     """Period 2026-11 Unifikasi: LAMPIRAN-I total equals the Induk column."""
     headers = auth_headers(client, SISWA)
-    _make_bp23_issued(client, headers, 11, gross=4_000_000)
+    _make_pph23_issued(client, headers, 11, gross=4_000_000)
     spt = _create_spt(client, headers, 11, return_type="pph_unifikasi")
     posted = _posting(client, headers, spt["id"])
 

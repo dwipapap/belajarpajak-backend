@@ -464,7 +464,7 @@ def seed_masukan_examples(
 #
 # Documents for Masa September 2026 so the SPT flow can be exercised with real
 # figures: an issued keluaran + a credited masukan (PPN kurang bayar 960.000)
-# and an issued BP23 (PPh unifikasi 1.500.000). Plus one already-posted draft
+# and an issued BPPU Pasal 23 (PPh unifikasi 1.500.000). Plus one already-posted draft
 # SPT PPh Unifikasi as a worked example.
 
 SPT_EXAMPLE_MONTH = 9
@@ -590,7 +590,7 @@ def seed_spt_examples(
         session.add(masukan)
         session.flush()
 
-    # 3. BP23 issued — dividen 24-101-01, bruto 10.000.000, tarif 15%, PPh 1.500.000.
+    # 3. BPPU (Pasal 23) issued — dividen 24-101-01, bruto 10.000.000, tarif 15%, PPh 1.500.000.
     kap_kjs = "411124-100"
     slip_exists = session.exec(
         select(WithholdingSlip).where(
@@ -608,7 +608,7 @@ def seed_spt_examples(
         dpp = calculate_dpp(gross_income, dpp_rate)
         income_tax, _ = _resolve_income_tax(
             session,
-            slip_type=SlipType.bp23,
+            slip_type=SlipType.bppu,
             tax_nature=SlipTaxNature.final,
             tax_facility=SlipTaxFacility.none,
             gross_income=gross_income,
@@ -621,7 +621,7 @@ def seed_spt_examples(
             recipient_identity_number="1234567890123456",
         )
         slip = WithholdingSlip(
-            slip_type=SlipType.bp23,
+            slip_type=SlipType.bppu,
             tenant_id=tenant.id,
             class_id=school_class.id if school_class else None,
             siswa_id=siswa.id,
@@ -648,7 +648,7 @@ def seed_spt_examples(
         )
         session.add(slip)
         session.flush()
-        issue_slip(slip, "BP23")
+        issue_slip(slip, "BPPU")
         session.add(slip)
         session.flush()
 

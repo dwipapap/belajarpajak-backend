@@ -310,12 +310,12 @@ def test_angsuran_guru_tenant_scope(client: TestClient) -> None:
 # --- B2 submit via deposit ------------------------------------------------------
 
 
-def _make_bp23_issued_unifikasi(
+def _make_pph23_issued_unifikasi(
     client: TestClient, headers: dict, month: int, year: int, gross: int
 ) -> dict:
     """Bukti potong PPh 23 terbit untuk periode SPT unifikasi (dpp 100%, tarif 15%)."""
     res = client.post(
-        f"{BASE}/bp23",
+        f"{BASE}/bppu",
         json={
             "tax_month": month,
             "tax_year": year,
@@ -331,7 +331,7 @@ def _make_bp23_issued_unifikasi(
     assert res.status_code == 201, res.text
     created = res.json()
     issued = client.post(
-        f"{BASE}/bp23/{created['id']}/issue",
+        f"{BASE}/bppu/{created['id']}/issue",
         headers=headers,
         json={"kode_otorisasi": "KO-SIM-123"},
     )
@@ -378,7 +378,7 @@ def test_spt_submit_deposit_saldo_kurang_dan_cukup(client: TestClient) -> None:
     total_pajak = 0
     gross = (saldo + 2_000_000) * 10
     for _ in range(3):
-        total_pajak += _make_bp23_issued_unifikasi(client, headers, 10, 2025, gross)[
+        total_pajak += _make_pph23_issued_unifikasi(client, headers, 10, 2025, gross)[
             "income_tax"
         ]
         if total_pajak > saldo:
