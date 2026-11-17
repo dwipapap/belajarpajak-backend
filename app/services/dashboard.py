@@ -307,9 +307,7 @@ def build_guru_dashboard(
     items: list[GradingItem] = []
     names = {s.id: s.full_name for s in students}
     pending_by_student: dict[int, int] = defaultdict(int)
-    (_, slip_w), (_, kel_w), (_, mas_w), (_, spt_w) = _guru_grading_conditions(
-        class_id
-    )
+    (_, slip_w), (_, kel_w), (_, mas_w), (_, spt_w) = _guru_grading_conditions(class_id)
     for st_type, siswa_id, n in session.exec(
         select(WithholdingSlip.slip_type, WithholdingSlip.siswa_id, func.count())
         .where(slip_w)
@@ -604,6 +602,8 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         todos.append(
             SiswaTodo(
                 kind="draft",
+                module=d.module,
+                id=d.id,
                 title=f"Terbitkan {d.module_label}: {d.title}",
                 detail=d.period,
                 module_label=d.module_label,
@@ -620,6 +620,8 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         todos.append(
             SiswaTodo(
                 kind="draft",
+                module=d.module,
+                id=d.id,
                 title=f"Terbitkan faktur keluaran: {d.title}",
                 detail=d.period,
                 module_label=d.module_label,
@@ -636,6 +638,8 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         todos.append(
             SiswaTodo(
                 kind="spt",
+                module=d.module,
+                id=d.id,
                 title=f"Laporkan {d.title}",
                 detail=d.period,
                 module_label=d.module_label,
@@ -651,6 +655,8 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         todos.append(
             SiswaTodo(
                 kind="billing",
+                module="billing",
+                id=r.id,
                 title=f"Bayar kode billing {r.code}",
                 detail=f"Rp {r.amount:,}".replace(",", "."),
                 module_label="Pembayaran",
@@ -671,6 +677,8 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         todos.append(
             SiswaTodo(
                 kind="masukan",
+                module=d.module,
+                id=d.id,
                 title=f"Kreditkan faktur masukan: {d.title}",
                 detail=d.period,
                 module_label=d.module_label,

@@ -128,6 +128,8 @@ class SiswaDocument(BaseModel):
 
 class SiswaTodo(BaseModel):
     kind: str  # draft | spt | billing | masukan
+    module: str
+    id: int | None
     title: str
     detail: str | None
     module_label: str
