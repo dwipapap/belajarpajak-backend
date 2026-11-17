@@ -28,6 +28,11 @@ class SlipBase(BaseModel):
     recipient_name: str | None = Field(default=None, max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
     recipient_nitku: str | None = Field(default=None, max_length=32)
+    recipient_country: str | None = Field(default=None, max_length=100)
+    recipient_birth_date: date | None = Field(default=None)
+    recipient_birth_place: str | None = Field(default=None, max_length=100)
+    recipient_passport_number: str | None = Field(default=None, max_length=40)
+    recipient_kitas_number: str | None = Field(default=None, max_length=40)
 
     ptkp_status: str | None = Field(default=None, max_length=10)
     ter_category: str | None = Field(default=None, max_length=1)
@@ -54,6 +59,8 @@ class SlipBase(BaseModel):
     document_number: str | None = Field(default=None, max_length=60)
     document_date: date | None = Field(default=None)
     document_nitku: str | None = Field(default=None, max_length=32)
+    payment_method: str | None = Field(default=None, max_length=40)
+    sp2d_number: str | None = Field(default=None, max_length=60)
 
     @field_validator("tarif_treaty_basis_points", mode="before")
     @classmethod
@@ -92,6 +99,11 @@ class SlipUpdate(BaseModel):
     recipient_name: str | None = Field(default=None, max_length=150)
     recipient_address: str | None = Field(default=None, max_length=255)
     recipient_nitku: str | None = Field(default=None, max_length=32)
+    recipient_country: str | None = Field(default=None, max_length=100)
+    recipient_birth_date: date | None = Field(default=None)
+    recipient_birth_place: str | None = Field(default=None, max_length=100)
+    recipient_passport_number: str | None = Field(default=None, max_length=40)
+    recipient_kitas_number: str | None = Field(default=None, max_length=40)
 
     ptkp_status: str | None = Field(default=None, max_length=10)
     ter_category: str | None = Field(default=None, max_length=1)
@@ -118,6 +130,8 @@ class SlipUpdate(BaseModel):
     document_number: str | None = Field(default=None, max_length=60)
     document_date: date | None = Field(default=None)
     document_nitku: str | None = Field(default=None, max_length=32)
+    payment_method: str | None = Field(default=None, max_length=40)
+    sp2d_number: str | None = Field(default=None, max_length=60)
 
     @field_validator("tarif_treaty_basis_points", mode="before")
     @classmethod
@@ -192,6 +206,11 @@ class SlipRead(BaseModel):
     recipient_name: str | None
     recipient_address: str | None
     recipient_nitku: str | None
+    recipient_country: str | None
+    recipient_birth_date: date | None
+    recipient_birth_place: str | None
+    recipient_passport_number: str | None
+    recipient_kitas_number: str | None
 
     ptkp_status: str | None
 
@@ -224,6 +243,8 @@ class SlipRead(BaseModel):
     document_number: str | None
     document_date: date | None
     document_nitku: str | None
+    payment_method: str | None
+    sp2d_number: str | None
 
     score: int | None
     teacher_feedback: str | None

@@ -647,3 +647,20 @@ def test_deleting_user_with_invoices_is_rejected(client: TestClient):
             blocked = True
 
     assert blocked
+
+def test_status_faktur_derived_and_filterable(client: TestClient):
+    headers = auth_headers(client, SISWA)
+    draft = client.post("/api/v1/faktur-keluaran", json=_payload(), headers=headers).json()
+    assert draft["status_faktur"] == "CREATED"
+    issued = _issue(client, draft["id"], headers).json()
+    assert issued["status_faktur"] == "APPROVED"
+
+    def _ids(*statuses: str) -> set[int]:
+        query = "&".join(f"status_faktur={s}" for s in statuses)
+        res = client.get(f"/api/v1/faktur-keluaran?{query}&size=100", headers=headers)
+        assert res.status_code == 200, res.text
+        return {item["id"] for item in res.json()["items"]}
+
+    assert issued["id"] in _ids("APPROVED")
+    assert issued["id"] not in _ids("CREATED", "CANCELED")
+    assert not _ids("SIGNING_IN_PROGRESS")
