@@ -31,6 +31,7 @@ from app.models.tagihan import Tagihan
 from app.models.tarif_pajak import TarifProgresifPasal17, TierPtkp
 from app.models.tax_input_invoice import TaxInputInvoice, TaxInputLine
 from app.models.tax_invoice import TaxInvoice, TaxInvoiceLine
+from app.models.tax_invoice_return import TaxInvoiceReturn, TaxInvoiceReturnLine
 from app.models.tax_return import TaxReturn, TaxReturnLine
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -53,6 +54,8 @@ __all__ = [
     "TaxReturnStatus",
     "SignerCapacity",
     "BillingStatus",
+    "TaxInvoiceReturn",
+    "TaxInvoiceReturnLine",
     "TaxInputInvoice",
     "TaxInputLine",
     "Tenant",

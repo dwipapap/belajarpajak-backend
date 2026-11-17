@@ -31,6 +31,7 @@ from app.models.tax_invoice import TaxInvoice
 from app.models.tax_return import TaxReturn, TaxReturnLine
 from app.schemas.tax_return import SptLampiranRow
 from app.services import kjs
+from app.services.faktur_retur import select_retur_keluaran, select_retur_masukan
 
 #: Faktur Pajak codes that belong to the A-1 export table (subset of A-2).
 EXPORT_CODES = frozenset({"09", "10"})
@@ -260,6 +261,14 @@ def select_sp_slips(session: Session, tax_return: TaxReturn) -> list[Withholding
     )
 
 
+def _net_retur(aggregated: dict, key: tuple[str, str], ret) -> None:
+    row = aggregated.setdefault(key, {"dpp": 0, "dpp_nilai_lain": 0, "ppn": 0, "ppnbm": 0})
+    row["dpp"] -= ret.total_dpp
+    row["dpp_nilai_lain"] -= ret.total_dpp_other
+    row["ppn"] -= ret.total_ppn
+    row["ppnbm"] -= ret.total_ppnbm
+
+
 def _ppn_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
     """Aggregate Bagian I (issued faktur keluaran) and Bagian II (credited masukan)."""
     aggregated: dict[tuple[str, str], dict[str, int]] = {}
@@ -289,6 +298,34 @@ def _ppn_lines(session: Session, tax_return: TaxReturn) -> list[TaxReturnLine]:
         row["dpp_nilai_lain"] += invoice.total_dpp_other
         row["ppn"] += invoice.total_ppn
         row["ppnbm"] += invoice.total_ppnbm
+
+    # Retur Pajak: issued returns of the period net down the original kode's row
+    # (retur Pajak Keluaran reduce output tax, creditable retur Pajak Masukan reduce
+    # credited input tax). A row may go negative when the retur outweighs the period.
+    returns_keluaran = select_retur_keluaran(
+        session,
+        tenant_id=tax_return.tenant_id,
+        siswa_id=tax_return.siswa_id,
+        tax_year=tax_return.tax_year,
+        tax_month=tax_return.tax_month,
+    )
+    for ret, original in returns_keluaran:
+        section, _label = PENYERAHAN_SECTIONS.get(
+            original.transaction_code, ("I_A4", "Penyerahan lainnya")
+        )
+        _net_retur(aggregated, (section, original.transaction_code), ret)
+    returns_masukan = select_retur_masukan(
+        session,
+        tenant_id=tax_return.tenant_id,
+        siswa_id=tax_return.siswa_id,
+        tax_year=tax_return.tax_year,
+        tax_month=tax_return.tax_month,
+    )
+    for ret, original in returns_masukan:
+        section, _label = MASUKAN_SECTIONS.get(
+            original.transaction_code, ("II_C", "Perolehan lainnya (FP Kode 01, 09 dan 10)")
+        )
+        _net_retur(aggregated, (section, original.transaction_code), ret)
 
     lines = [
         TaxReturnLine(
