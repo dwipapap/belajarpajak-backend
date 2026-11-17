@@ -1,7 +1,7 @@
 """Official e-Bupot tax-object catalog (kode objek pajak resmi), loaded once.
 
 The JSON lives in ``app/data/objek_pajak.json`` and is keyed by catalog module
-(BPU, SP, CY, BPNR, BP21, BP26, MP). Each slip type maps to one module; BP23 is
+(BPU, SP, CY, BPNR, BP21, BP26, MP). Each slip type maps to one module; legacy BP23 is
 the Pasal 23 slice of the BPU module. Facility codes in ``tarif_per_fasilitas``:
 "9" tanpa fasilitas, "8" fasilitas lainnya, "7" SKD, "4" PPh DTP (others are kept
 as data only). The key ``"null"`` means the rate is not facility-specific.
@@ -21,6 +21,7 @@ _DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "objek_pajak.json
 #: slip type -> (catalog module, optional pasal filter)
 _MODULES: dict[str, tuple[str, str | None]] = {
     SlipType.bppu.value: ("BPU", None),
+    # Legacy: kept only so old migrations (remap) can still resolve bp23 rows.
     SlipType.bp23.value: ("BPU", "Pasal 23"),
     SlipType.sp.value: ("SP", None),
     SlipType.cy.value: ("CY", None),

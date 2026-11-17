@@ -394,13 +394,13 @@ def test_superadmin_cannot_mutate_documents(client: TestClient):
     super_headers = auth_headers(client, SUPERADMIN)
 
     # Reading works.
-    assert client.get(f"{BASE}/bp23", headers=super_headers).status_code == 200
+    assert client.get(f"{BASE}/bppu", headers=super_headers).status_code == 200
     assert client.get(f"{BASE}/faktur-keluaran", headers=super_headers).status_code == 200
     assert client.get(f"{BASE}/spt", headers=super_headers).status_code == 200
 
     # Creating a bupot is rejected.
     res = client.post(
-        f"{BASE}/bp23",
+        f"{BASE}/bppu",
         json={
             "tax_month": 11,
             "tax_year": 2026,

@@ -25,7 +25,7 @@ from app.services.pdf_kit import (
 
 _CODE = {
     "bppu": "BPPU",
-    "bp23": "BPPU",
+    "bp23": "BPPU",  # legacy
     "bp21": "BP21",
     "bp26": "BP26",
     "bpmp": "BPMP",

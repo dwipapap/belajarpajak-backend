@@ -1,6 +1,6 @@
 """Simulated e-Bupot withholding slip routes — one factory for all slip types.
 
-BP21, BP23 and BP26 share the same form shape with different data values, so all
+BP21 and BP26 share the same form shape with different data values, so all
 mount the identical endpoint set; ``slip_type`` scopes every query. Adding a new
 bupot type is one enum value + one ``make_slip_router`` call.
 
@@ -112,7 +112,7 @@ def _validate_learning_fields(
     """Educational validation mirroring the reference portal rules (simplified for SMK/kuliah).
 
     Raises 422 with Indonesian messages so students learn the format, not just
-    presence. BP23 without NPWP (16 zeros) is allowed and handled by the x2 rate.
+    presence. Pasal 23 BPPU without NPWP (16 zeros) is allowed and handled by the x2 rate.
     BP26 allows foreign TIN/passport (non-digit identity).
     """
 
@@ -123,7 +123,7 @@ def _validate_learning_fields(
 
     if recipient_identity_number is not None:
         ident = recipient_identity_number.strip()
-        if slip_type in (SlipType.bp21, SlipType.bp23, SlipType.bppu, SlipType.sp, SlipType.cy):
+        if slip_type in (SlipType.bp21, SlipType.bppu, SlipType.sp, SlipType.cy):
             if not ident.isdigit() or len(ident) != 16:
                 _fail("Nomor identitas penerima harus 16 digit (NPWP 16 / NIK).")
         elif slip_type in (SlipType.bp26, SlipType.bpnr):
@@ -416,10 +416,12 @@ def _resolve_income_tax(
 
     final_rate_basis_points = rate_basis_points
     if (
-        slip_type in (SlipType.bp23, SlipType.bppu)
+        slip_type == SlipType.bppu
         and _is_pasal_23_object(slip_type, tax_object_code)
-    ) and (
-        not recipient_identity_number or recipient_identity_number.startswith("0000000000000000")
+        and (
+            not recipient_identity_number
+            or recipient_identity_number.startswith("0000000000000000")
+        )
     ):
         final_rate_basis_points *= 2
         return calculate_income_tax(dpp, final_rate_basis_points, tax_facility), "flat_x2"
@@ -430,7 +432,6 @@ def _resolve_income_tax(
 #: One official sample code per slip type for the XML import template.
 _SAMPLE_CODES = {
     "bp21": "21-100-07",
-    "bp23": "24-101-01",
     "bp26": "27-100-99",
     "bppu": "24-101-01",
     "bpmp": "21-100-01",
@@ -1262,7 +1263,6 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
 
 
 bp21_router = make_slip_router(SlipType.bp21, "BP21")
-bp23_router = make_slip_router(SlipType.bp23, "BP23")
 bp26_router = make_slip_router(SlipType.bp26, "BP26")
 bppu_router = make_slip_router(SlipType.bppu, "BPPU")
 bpmp_router = make_slip_router(SlipType.bpmp, "BPMP")

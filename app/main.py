@@ -67,7 +67,6 @@ def create_app() -> FastAPI:
         users.router,
         classes.router,
         slips.bp21_router,
-        slips.bp23_router,
         slips.bp26_router,
         slips.bppu_router,
         slips.bpmp_router,
