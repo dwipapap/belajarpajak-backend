@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+from zoneinfo import ZoneInfo
 import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -523,7 +524,7 @@ def _safe_filename(text: str) -> str:
 
 def _cell(value: Any) -> Any:
     """Neutralise text that a spreadsheet would evaluate as a formula."""
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+    if isinstance(value, str) and len(value) > 1 and value[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + value
     return value
 
@@ -1122,7 +1123,7 @@ def export_assignment_scores(
                 "Sudah dinilai" if sub.final_score is not None else "Sudah mengumpulkan"
             )
             waktu = (
-                sub.submitted_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+                sub.submitted_at.astimezone(ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M WIB")
                 if sub.submitted_at
                 else "-"
             )
