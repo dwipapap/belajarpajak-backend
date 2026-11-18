@@ -225,10 +225,31 @@ SPT Masa PPN + PPh Unifikasi + PPh 21/26 (`/api/v1/spt`, `TaxReturnType`: `ppn`,
 - **Pemindahbukuan** (`/api/v1/pbk`): siswa submits (dari KAP → ke KAP, amount, masa, alasan); guru/admin/superadmin `setujui` / `tolak`.
 - **Tagihan** (`/api/v1/tagihan`): guru/admin issue SKP/STP; siswa `buat-billing`, then `lunaskan-dari-billing` after paying.
 - **Angsuran** (`/api/v1/angsuran`): siswa splits an unpaid billing into 2–12 cicilan with due dates; pay per cicilan (`/cicilan/{id}/pay`), or `batal`.
-- **Audit logs** (`/api/v1/audit-logs`, admin/superadmin): `GET` list of `AuditLog` entries written on SPT submit/review/pay.
+- **Audit logs** (`/api/v1/audit-logs`, admin/superadmin): `GET` list of `AuditLog` entries written on SPT submit/review/pay and assignment actions.
+- **PDF learning watermark** (`app/services/pdf_kit.py::draw_learning_watermark`): Every generated PDF (all 7 e-Bupot slip types, Faktur Pajak Keluaran normal & invalid/cancelled, Kode Billing, BPE SPT, and SPT Masa PPN / PPh Unifikasi / PPh 21/26) carries a diagonal watermark `"SIMULASI PEMBELAJARAN — BUKAN DOKUMEN RESMI"` and a footer band `"DOKUMEN SIMULASI PEMBELAJARAN — TIDAK SAH UNTUK KEPERLUAN PERPAJAKAN RESMI"` on every page.
+
+## Tugas (Classroom Assignments), Auto-Grading & Export Nilai
+
+Teachers assign case studies (`Assignment`) targeting any gradable document type (`bp21`, `bp26`, `bppu`, `bpmp`, `bpnr`, `sp`, `cy`, `faktur_keluaran`, `faktur_masukan`, `spt_ppn`, `spt_pph_unifikasi`, `spt_pph_21_26`, `spt_pph21_26`). When a student submits one of their own documents (`AssignmentSubmission`), `app/services/auto_grade.py` runs rule-based internal consistency checks (status issued/reported, identity format, period validity, expected tariff, DPP/PPh/PPN math, electronic signature, and SPT recomputation/billing settlement) and snapshots `auto_score` (0–100) + `auto_checks`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/tugas` | List assignments scoped by role (`?class_id=`, `?status=`, `?doc_type=`) |
+| POST | `/api/v1/tugas` | Create assignment for a class taught by the guru (`publish: true` optional) |
+| GET | `/api/v1/tugas/{id}` | Assignment detail + full class roster submissions (guru/admin) or `my_submission` (siswa) |
+| PATCH | `/api/v1/tugas/{id}` | Update title/instructions/due_at (and `doc_type`/`class_id` when no submissions yet) |
+| POST | `/api/v1/tugas/{id}/publish` | Publish draft assignment |
+| POST | `/api/v1/tugas/{id}/close` | Close published assignment (blocks new submissions) |
+| DELETE | `/api/v1/tugas/{id}` | Delete assignment (allowed only when no submissions exist) |
+| GET | `/api/v1/tugas/{id}/submissions` | List every enrolled student in the class with submission status (`submitted: false` for missing) |
+| GET | `/api/v1/tugas/{id}/candidates` | Siswa lists their own documents matching the assignment's `doc_type` |
+| POST | `/api/v1/tugas/{id}/submit` | Siswa submits `{doc_id}` (runs `auto_grade_document`, sets `is_late` if after `due_at`, allows resubmit while `published` and ungraded by guru) |
+| PATCH | `/api/v1/tugas/{id}/submissions/{siswa_id}` | Guru grades submission (`final_score`, `teacher_feedback`) and syncs score/feedback onto the underlying document |
+| GET | `/api/v1/tugas/{id}/export?format=xlsx\|csv` | Export per-assignment grade sheet (`Nama, NIS, Status, Waktu kumpul, Terlambat, Nilai otomatis, Nilai akhir, Umpan balik`) |
+| GET | `/api/v1/tugas/rekap-kelas/{class_id}/export?format=xlsx\|csv` | Export class gradebook matrix (students × assignments + average score) |
 
 ## Scope & what's next
 
-**Done:** multi-tenant auth (login/refresh/me/change-password), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, institution periods + dossier, simulated e-Bupot BP21/BP26/BPPU/BPMP/BPNR/SP/CY (SIM-TER, signer + BPE-SIM PDF, Bukti Potong Saya) + BP A1/A2, e-Faktur Keluaran/Masukan, SPT Masa PPN + PPh Unifikasi + PPh 21/26 (posting/pernyataan/submit/pembetulan/billing/deposit), kode billing + pay (NTPN/kanal/multi-detail) + PDF generation, deposit, pemindahbukuan, tagihan, angsuran, audit trail, PTKP/progressive tariff management, seed data, Alembic migrations, smoke tests.
+**Done:** multi-tenant auth (login/refresh/me/change-password), RBAC (`superadmin`, `admin`, `guru`, `siswa`), tenant CRUD, user CRUD (tenant-scoped), classes + enrollments, role-shaped dashboard summaries, institution periods + dossier, simulated e-Bupot BP21/BP26/BPPU/BPMP/BPNR/SP/CY (SIM-TER, signer + BPE-SIM PDF, Bukti Potong Saya) + BP A1/A2, e-Faktur Keluaran/Masukan + Retur, SPT Masa PPN + PPh Unifikasi + PPh 21/26 (posting/pernyataan/submit/pembetulan/billing/deposit), kode billing + pay (NTPN/kanal/multi-detail) + PDF generation, deposit, pemindahbukuan, tagihan, angsuran, Tugas (classroom assignments) + rule-based auto-grading + Excel/CSV gradebook export, learning watermark on all PDFs, audit trail, PTKP/progressive tariff management, seed data, Alembic migrations, smoke tests.
 
-**Next phases:** see `../plans/README.md` (plans 007–011: signed Upload Faktur, prepopulated Pajak Masukan, tabbed SPT Induk + Lampiran, BPE SPT + Dokumen Saya, SPT Tahunan OP) and `../docs/AUDIT_FIDELITAS_ALUR.md`. Deferred: Ganti Peran / Profil WP. Later: retur / dokumen lain, SPT Tahunan Badan, Buku Besar, LMS (modules/assignments, gradebook, rapor, notifikasi). All future tenant-scoped tables should carry `tenant_id` and reuse the same server-side tenancy pattern.
+**Next phases:** see `../plans/README.md` and `../docs/AUDIT_FIDELITAS_ALUR.md`. Deferred: Ganti Peran / Profil WP. Later: dokumen lain, SPT Tahunan Badan, Buku Besar. All future tenant-scoped tables should carry `tenant_id` and reuse the same server-side tenancy pattern.

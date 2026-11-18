@@ -23,7 +23,13 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from app.models.enums import BuyerIdentityType, TaxInvoiceStatus
-from app.services.pdf_kit import DISCLAIMER, F4_SIZE, fmt_date, or_dash
+from app.services.pdf_kit import (
+    DISCLAIMER,
+    F4_SIZE,
+    draw_learning_watermark,
+    fmt_date,
+    or_dash,
+)
 
 FONT = "Helvetica"
 BOLD = "Helvetica-Bold"
@@ -150,6 +156,7 @@ class _Doc:
             self.c.showPage()
         self.page += 1
         self.t = BTOP
+        draw_learning_watermark(self.c, F4_SIZE)
         self.text(PAD + BX0, 56, "SIMULATOR PEMBELAJARAN PAJAK", BOLD, 6.5, GRAY)
         if self.tenant:
             self.text(PAD + BX0, 64, self.tenant.upper()[:60], FONT, 6.5, GRAY)

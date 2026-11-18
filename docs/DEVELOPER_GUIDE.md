@@ -1320,4 +1320,17 @@ Status `draft`/`awaiting_payment`/`reported`. Lapor selalu lewat
 - `/angsuran`: `POST /` (siswa), `GET /`, `GET /{angsuran_id}`, `POST /{angsuran_id}/batal`, `POST /cicilan/{cicilan_id}/pay`.
 
 **Audit** (`app/routers/audit.py`, service `audit.py`):
-`GET /audit-logs` (admin/superadmin). Ditulis pada submit/review/pay.
+`GET /audit-logs` (admin/superadmin). Ditulis pada submit/review/pay serta aksi tugas (`assignment.create`, `assignment.publish`, `assignment.close`, `assignment.submit`, `assignment.grade`).
+
+**Tugas (Penugasan Kelas), Penilaian Otomatis & Ekspor Nilai** (`app/routers/assignments.py`, prefix `/tugas`, model `app/models/assignment.py`, service `app/services/auto_grade.py`, migrasi `e015tugasassignments`):
+- Tabel `assignments` (`Assignment`: `tenant_id`, `class_id`, `created_by`, `title`, `instructions`, `doc_type` `AssignmentDocType`, `due_at` nullable timestamptz, `status` `draft`/`published`/`closed`) dan `assignment_submissions` (`AssignmentSubmission`: `assignment_id` FK cascade, `siswa_id`, `doc_id`, `submitted_at`, `is_late`, `auto_score` 0–100, `auto_checks` JSON list, `final_score` nullable 0–100, `teacher_feedback` ≤500, `graded_by`, `graded_at`; unik `(assignment_id, siswa_id)`).
+- Endpoint:
+  - `GET /api/v1/tugas` & `POST /api/v1/tugas`
+  - `GET /api/v1/tugas/{id}`, `PATCH /api/v1/tugas/{id}`, `DELETE /api/v1/tugas/{id}` (hanya bila belum ada pengumpulan)
+  - `POST /api/v1/tugas/{id}/publish` & `POST /api/v1/tugas/{id}/close`
+  - `GET /api/v1/tugas/{id}/submissions` (mengembalikan seluruh siswa yang terdaftar di kelas, termasuk baris `submitted: false` bagi yang belum mengumpulkan)
+  - `GET /api/v1/tugas/{id}/candidates` & `POST /api/v1/tugas/{id}/submit` (body `{doc_id}`; menjalankan `auto_grade_document`, mengizinkan kirim ulang selama tugas masih `published` dan belum dinilai guru)
+  - `PATCH /api/v1/tugas/{id}/submissions/{siswa_id}` (guru mengisi `final_score` & `teacher_feedback`; nilai dan umpan balik juga disinkronkan langsung ke kolom `score` dan `teacher_feedback` pada dokumen asli siswa)
+  - `GET /api/v1/tugas/{id}/export?format=xlsx|csv` & `GET /api/v1/tugas/rekap-kelas/{class_id}/export?format=xlsx|csv` (dibangun dengan `openpyxl` + `csv` stdlib).
+- **Watermark PDF Simulasi Pembelajaran** (`app/services/pdf_kit.py::draw_learning_watermark`): Dipanggil pada setiap halaman PDF bukti potong (`slip_pdf.py`), faktur pajak keluaran normal maupun batal/tidak sah (`faktur_pdf.py`), kode billing (`billing_pdf.py`), BPE SPT (`spt_bpe_pdf.py`), dan SPT Masa PPN / PPh Unifikasi / PPh 21/26 (`spt_pdf.py` & `spt_pdf_ppn.py`).
+

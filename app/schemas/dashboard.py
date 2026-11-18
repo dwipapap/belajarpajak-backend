@@ -73,6 +73,7 @@ class GuruDashboard(BaseModel):
     grading_total: int
     grading_by_module: list[GradingModuleCount]
     grading_items: list[GradingItem]
+    tugas_pending_grading: int = 0
 
 
 # --- Siswa dashboard ----------------------------------------------------------
@@ -127,7 +128,7 @@ class SiswaDocument(BaseModel):
 
 
 class SiswaTodo(BaseModel):
-    kind: str  # draft | spt | billing | masukan
+    kind: str  # draft | spt | billing | masukan | tugas
     module: str
     id: int | None
     title: str
@@ -147,6 +148,7 @@ class SiswaDashboard(BaseModel):
     grades: SiswaGradeStats
     todos: list[SiswaTodo]
     todo_total: int
+    open_tugas_count: int = 0
     recent: list[SiswaDocument]
     graded: list[SiswaDocument]
 

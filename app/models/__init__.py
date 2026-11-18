@@ -1,11 +1,14 @@
 """SQLModel table models. Import all here so Alembic autogenerate sees the metadata."""
 
 from app.models.angsuran import Angsuran, Cicilan
+from app.models.assignment import Assignment, AssignmentSubmission
 from app.models.audit_log import AuditLog
 from app.models.billing import BillingCode
 from app.models.deposit import DepositAccount, DepositMutation
 from app.models.enrollment import Enrollment
 from app.models.enums import (
+    AssignmentDocType,
+    AssignmentStatus,
     BillingStatus,
     BuyerIdentityType,
     Role,
@@ -37,6 +40,10 @@ from app.models.tenant import Tenant
 from app.models.user import User
 
 __all__ = [
+    "Assignment",
+    "AssignmentSubmission",
+    "AssignmentStatus",
+    "AssignmentDocType",
     "Role",
     "TenantType",
     "SlipType",
