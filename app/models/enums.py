@@ -175,3 +175,30 @@ class LbTreatment(StrEnum):
 
     kompensasi = "kompensasi"
     restitusi = "restitusi"
+
+
+class AssignmentStatus(StrEnum):
+    """Lifecycle status of a class assignment (Tugas)."""
+
+    draft = "draft"
+    published = "published"
+    closed = "closed"
+
+
+class AssignmentDocType(StrEnum):
+    """Gradable document types supported by Tugas."""
+
+    bp21 = "bp21"
+    bp26 = "bp26"
+    bppu = "bppu"
+    bpmp = "bpmp"
+    bpnr = "bpnr"
+    sp = "sp"
+    cy = "cy"
+    faktur_keluaran = "faktur_keluaran"
+    faktur_masukan = "faktur_masukan"
+    spt_ppn = "spt_ppn"
+    spt_pph_unifikasi = "spt_pph_unifikasi"
+    spt_pph_21_26 = "spt_pph_21_26"
+    spt_pph21_26 = "spt_pph21_26"
+
