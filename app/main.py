@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.routers import (
     a1_a2,
     angsuran,
+    assignments,
     audit,
     auth,
     billings,
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
         tenants.router,
         users.router,
         classes.router,
+        assignments.router,
         slips.bp21_router,
         slips.bp26_router,
         slips.bppu_router,

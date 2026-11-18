@@ -12,9 +12,11 @@ from datetime import date, datetime
 from sqlalchemy import and_
 from sqlmodel import Session, func, select
 
+from app.models.assignment import Assignment, AssignmentSubmission
 from app.models.billing import BillingCode
 from app.models.enrollment import Enrollment
 from app.models.enums import (
+    AssignmentStatus,
     BillingStatus,
     Role,
     SlipStatus,
@@ -414,6 +416,15 @@ def build_guru_dashboard(
                 has_activity=total > 0,
             )
         )
+    tugas_pending = session.exec(
+        select(func.count())
+        .select_from(AssignmentSubmission)
+        .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
+        .where(
+            Assignment.class_id == class_id,
+            AssignmentSubmission.final_score.is_(None),
+        )
+    ).one()
     return GuruDashboard(
         classes=options,
         class_id=class_id,
@@ -424,6 +435,7 @@ def build_guru_dashboard(
             for m, n in sorted(by_module.items(), key=lambda kv: -kv[1])
         ],
         grading_items=items[:QUEUE_LIMIT],
+        tugas_pending_grading=int(tugas_pending),
     )
 
 
@@ -685,8 +697,49 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
                 at=d.at,
             )
         )
+
+    # Open assignments (published in enrolled classes without a submission from this siswa)
+    enrolled_cids = select(Enrollment.class_id).where(Enrollment.siswa_id == sid)
+    submitted_aids = select(AssignmentSubmission.assignment_id).where(
+        AssignmentSubmission.siswa_id == sid
+    )
+    open_assignments = list(
+        session.exec(
+            select(Assignment)
+            .where(
+                Assignment.class_id.in_(enrolled_cids),
+                Assignment.status == AssignmentStatus.published,
+                Assignment.id.not_in(submitted_aids),
+            )
+            .order_by(Assignment.due_at.asc().nulls_last(), Assignment.id.desc())
+        ).all()
+    )
+    open_tugas_count = len(open_assignments)
+    for a in open_assignments[:4]:
+        due_str = (
+            f"Tenggat: {a.due_at.strftime('%d/%m/%Y %H:%M')}"
+            if a.due_at
+            else "Tanpa tenggat"
+        )
+        todos.append(
+            SiswaTodo(
+                kind="tugas",
+                module="tugas",
+                id=a.id,
+                title=f"Kerjakan tugas: {a.title}",
+                detail=due_str,
+                module_label="Tugas Kelas",
+                at=a.updated_at,
+            )
+        )
+
     todo_total = (
-        ebupot.draft + keluaran.draft + spt.unreported + billing.unpaid + masukan.not_credited
+        ebupot.draft
+        + keluaran.draft
+        + spt.unreported
+        + billing.unpaid
+        + masukan.not_credited
+        + open_tugas_count
     )
 
     return SiswaDashboard(
@@ -700,6 +753,7 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         grades=grades,
         todos=todos,
         todo_total=todo_total,
+        open_tugas_count=open_tugas_count,
         recent=_newest(session, sid, 6),
         graded=_newest(session, sid, 4, scored=True),
     )
