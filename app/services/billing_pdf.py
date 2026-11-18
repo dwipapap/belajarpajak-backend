@@ -24,6 +24,7 @@ from app.models.billing import BillingCode, BillingLine
 from app.models.enums import TaxReturnType
 from app.models.tax_return import TaxReturn, TaxReturnLine
 from app.services import kjs
+from app.services.pdf_kit import draw_learning_watermark
 
 _INK = (0.1, 0.1, 0.14)
 _GOLD = (0.94, 0.74, 0.15)
@@ -130,6 +131,7 @@ def render_billing_pdf(session: Session, billing: BillingCode) -> bytes:
     width, height = A4
     pdf = canvas.Canvas(buffer, pagesize=A4)
     pdf.setTitle(f"Kode Billing {billing.code}")
+    draw_learning_watermark(pdf, A4)
 
     margin = 25 * mm
     top = height - 30 * mm

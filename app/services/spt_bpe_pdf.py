@@ -17,6 +17,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from app.models.tax_return import TaxReturn
+from app.services.pdf_kit import draw_learning_watermark
 
 _INK = (0.1, 0.1, 0.14)
 
@@ -35,6 +36,7 @@ def render_spt_bpe_pdf(tax_return: TaxReturn) -> bytes:
     width, height = A4
     pdf = canvas.Canvas(buffer, pagesize=A4)
     pdf.setTitle(f"BPE SPT {tax_return.bpe_number or tax_return.id}")
+    draw_learning_watermark(pdf, A4)
 
     margin = 25 * mm
     top = height - 30 * mm

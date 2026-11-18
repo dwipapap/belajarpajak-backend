@@ -95,6 +95,25 @@ def or_dash(value) -> str:
     return text or "-"
 
 
+WATERMARK_MAIN = "SIMULASI PEMBELAJARAN"
+WATERMARK_SUB = "BUKAN DOKUMEN RESMI"
+WATERMARK_COLOR = HexColor("#EAEAEA")
+
+
+def draw_learning_watermark(c: canvas.Canvas, pagesize: tuple[float, float] = A4_SIZE) -> None:
+    """Draw a very light diagonal learning watermark under page content."""
+    w, h = pagesize
+    c.saveState()
+    c.setFillColor(WATERMARK_COLOR)
+    c.translate(w / 2, h / 2)
+    c.rotate(28)
+    c.setFont(BOLD, 42)
+    c.drawCentredString(0, 12, WATERMARK_MAIN)
+    c.setFont(BOLD, 22)
+    c.drawCentredString(0, -18, WATERMARK_SUB)
+    c.restoreState()
+
+
 @dataclass
 class Col:
     """Table column: ``title`` may contain newlines, ``sub`` is e.g. 'B.3'."""
@@ -118,7 +137,14 @@ class Sheet:
         self.cw = self.right - self.left
         self.c = canvas.Canvas(self.buffer, pagesize=pagesize)
         self.c.setTitle(title)
+        draw_learning_watermark(self.c, self.pagesize)
         self.y = self.h - 40  # cursor measured as absolute pdf y (descends)
+
+    def next_page(self) -> None:
+        """Advance to a new page and draw the learning watermark under content."""
+        self.c.showPage()
+        draw_learning_watermark(self.c, self.pagesize)
+        self.y = self.h - 40
 
     # ------------------------------------------------------------- primitives
     def text(self, x, y, s, font=FONT, size=BASE_SIZE, color=INK, align="left"):
@@ -350,6 +376,9 @@ __all__ = [
     "DISCLAIMER",
     "SIGN_VALID_NOTE",
     "Sheet",
+    "WATERMARK_MAIN",
+    "WATERMARK_SUB",
+    "draw_learning_watermark",
     "fmt_date",
     "fmt_number",
     "fmt_percent",

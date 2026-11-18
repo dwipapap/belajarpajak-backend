@@ -648,7 +648,7 @@ def render_ppn(
     sheet.y = sheet.h - 30
     _page1(sheet, tax_return, lines, tenant_name, taxpayer_name)
     footer(sheet)
-    sheet.c.showPage()
+    sheet.next_page()
     sheet.y = sheet.h - 30
     _page2(sheet, tax_return, tenant_name, taxpayer_name)
     footer(sheet)
