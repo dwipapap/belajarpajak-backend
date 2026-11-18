@@ -521,6 +521,13 @@ def _safe_filename(text: str) -> str:
     return cleaned or "tugas"
 
 
+def _cell(value: Any) -> Any:
+    """Neutralise text that a spreadsheet would evaluate as a formula."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def _render_xlsx(sheet_title: str, headers: list[str], rows: list[list[Any]]) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -540,7 +547,7 @@ def _render_xlsx(sheet_title: str, headers: list[str], rows: list[list[Any]]) ->
         cell.border = border
 
     for r_idx, row_vals in enumerate(rows, start=2):
-        ws.append(row_vals)
+        ws.append([_cell(v) for v in row_vals])
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=r_idx, column=col_idx)
             cell.border = border
@@ -564,7 +571,7 @@ def _render_csv(headers: list[str], rows: list[list[Any]]) -> bytes:
     writer = csv.writer(buf)
     writer.writerow(headers)
     for r in rows:
-        writer.writerow(["" if v is None else v for v in r])
+        writer.writerow(["" if v is None else _cell(v) for v in r])
     return buf.getvalue().encode("utf-8-sig")
 
 
@@ -1017,15 +1024,10 @@ def grade_submission(
         )
     ).first()
     if submission is None:
-        # Also allow looking up by submission.id if caller passed submission.id
-        by_id = session.get(AssignmentSubmission, siswa_id)
-        if by_id is not None and by_id.assignment_id == assignment.id:
-            submission = by_id
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pengumpulan siswa belum ditemukan",
-            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pengumpulan siswa belum ditemukan",
+        )
 
     siswa = session.get(User, submission.siswa_id)
     if siswa is None:
