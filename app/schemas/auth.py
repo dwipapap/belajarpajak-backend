@@ -39,6 +39,12 @@ class AccessTokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class LearningSettingsRead(BaseModel):
+    show_auto_check_details: bool = True
+    allow_late_submission: bool = True
+    allow_resubmission: bool = True
+
+
 class MeResponse(BaseModel):
     id: int
     email: str
@@ -49,3 +55,6 @@ class MeResponse(BaseModel):
     tenant_name: str | None
     is_active: bool
     must_change_password: bool
+    enabled_modules: list[str] = Field(default_factory=list)
+    settings: LearningSettingsRead = Field(default_factory=LearningSettingsRead)
+

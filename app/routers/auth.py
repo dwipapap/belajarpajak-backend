@@ -121,23 +121,44 @@ def refresh(data: RefreshRequest, session: SessionDep) -> AccessTokenResponse:
     )
 
 
+def _build_me_response(user: User, session: SessionDep) -> MeResponse:
+    from app.core.modules import (
+        ALL_MODULE_KEYS,
+        DEFAULT_SETTINGS,
+        resolve_effective_modules,
+        resolve_tenant_settings,
+    )
+    from app.schemas.auth import LearningSettingsRead
+
+    tenant_name: str | None = None
+    enabled_modules: list[str] = list(ALL_MODULE_KEYS)
+    settings_dict: dict[str, bool] = dict(DEFAULT_SETTINGS)
+
+    if user.tenant_id is not None:
+        tenant = session.get(Tenant, user.tenant_id)
+        if tenant is not None:
+            tenant_name = tenant.name
+            enabled_modules = resolve_effective_modules(tenant)
+            settings_dict = resolve_tenant_settings(tenant)
+
+    return MeResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        role=user.role,
+        tenant_id=user.tenant_id,
+        tenant_name=tenant_name,
+        is_active=user.is_active,
+        must_change_password=user.must_change_password,
+        enabled_modules=enabled_modules,
+        settings=LearningSettingsRead(**settings_dict),
+    )
+
+
 @router.get("/me", response_model=MeResponse)
 def me(current_user: CurrentUser, session: SessionDep) -> MeResponse:
-    tenant_name: str | None = None
-    if current_user.tenant_id is not None:
-        tenant = session.get(Tenant, current_user.tenant_id)
-        tenant_name = tenant.name if tenant else None
-    return MeResponse(
-        id=current_user.id,
-        email=current_user.email,
-        username=current_user.username,
-        full_name=current_user.full_name,
-        role=current_user.role,
-        tenant_id=current_user.tenant_id,
-        tenant_name=tenant_name,
-        is_active=current_user.is_active,
-        must_change_password=current_user.must_change_password,
-    )
+    return _build_me_response(current_user, session)
 
 
 @router.post("/change-password", response_model=MeResponse)
@@ -161,14 +182,5 @@ def change_password(
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
-    return MeResponse(
-        id=current_user.id,
-        email=current_user.email,
-        username=current_user.username,
-        full_name=current_user.full_name,
-        role=current_user.role,
-        tenant_id=current_user.tenant_id,
-        tenant_name=None,
-        is_active=current_user.is_active,
-        must_change_password=False,
-    )
+    return _build_me_response(current_user, session)
+
