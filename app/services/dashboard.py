@@ -97,11 +97,33 @@ def _maxdt(a: datetime | None, b: datetime | None) -> datetime | None:
     return max(a, b)
 
 
+def _enabled_slip_types(effective: set[str]) -> list:
+    from app.models.enums import SlipType
+
+    out = []
+    for st in (
+        SlipType.bp21,
+        SlipType.bp26,
+        SlipType.bppu,
+        SlipType.bpmp,
+        SlipType.bpnr,
+        SlipType.sp,
+        SlipType.cy,
+    ):
+        if st.value in effective:
+            out.append(st)
+    return out
+
+
 # --- Guru -----------------------------------------------------------------------
 
 
-def _guru_grading_conditions(class_id: int):
+def _guru_grading_conditions(class_id: int, effective: set[str]):
     """(model, extra where) for each gradable source: issued/credited/reported, no score."""
+    from app.core.modules import enabled_spt_return_types
+
+    slip_types = _enabled_slip_types(effective)
+    spt_types = enabled_spt_return_types(effective)
     return [
         (
             WithholdingSlip,
@@ -109,6 +131,9 @@ def _guru_grading_conditions(class_id: int):
                 WithholdingSlip.class_id == class_id,
                 WithholdingSlip.status == SlipStatus.issued,
                 WithholdingSlip.score.is_(None),
+                WithholdingSlip.slip_type.in_(slip_types)
+                if slip_types
+                else WithholdingSlip.id == -1,
             ),
         ),
         (
@@ -117,6 +142,7 @@ def _guru_grading_conditions(class_id: int):
                 TaxInvoice.class_id == class_id,
                 TaxInvoice.status == TaxInvoiceStatus.issued,
                 TaxInvoice.score.is_(None),
+                *([] if "faktur_keluaran" in effective else [TaxInvoice.id == -1]),
             ),
         ),
         (
@@ -126,6 +152,7 @@ def _guru_grading_conditions(class_id: int):
                 TaxInputInvoice.credit_status == TaxInputCreditStatus.credited,
                 TaxInputInvoice.status != TaxInvoiceStatus.invalid,
                 TaxInputInvoice.score.is_(None),
+                *([] if "faktur_masukan" in effective else [TaxInputInvoice.id == -1]),
             ),
         ),
         (
@@ -134,27 +161,58 @@ def _guru_grading_conditions(class_id: int):
                 TaxReturn.class_id == class_id,
                 TaxReturn.status == TaxReturnStatus.reported,
                 TaxReturn.score.is_(None),
+                TaxReturn.return_type.in_(spt_types)
+                if spt_types
+                else TaxReturn.id == -1,
             ),
         ),
     ]
 
 
-def _pending_by_class(session: Session, class_ids: list[int]) -> dict[int, int]:
+def _pending_by_class(
+    session: Session, class_ids: list[int], effective: set[str]
+) -> dict[int, int]:
+    from app.core.modules import enabled_spt_return_types
+
     result: dict[int, int] = defaultdict(int)
     if not class_ids:
         return result
-    sources = [
-        (WithholdingSlip, WithholdingSlip.status == SlipStatus.issued),
-        (TaxInvoice, TaxInvoice.status == TaxInvoiceStatus.issued),
-        (
-            TaxInputInvoice,
-            and_(
-                TaxInputInvoice.credit_status == TaxInputCreditStatus.credited,
-                TaxInputInvoice.status != TaxInvoiceStatus.invalid,
-            ),
-        ),
-        (TaxReturn, TaxReturn.status == TaxReturnStatus.reported),
-    ]
+    slip_types = _enabled_slip_types(effective)
+    spt_types = enabled_spt_return_types(effective)
+
+    sources = []
+    if slip_types:
+        sources.append(
+            (
+                WithholdingSlip,
+                and_(
+                    WithholdingSlip.status == SlipStatus.issued,
+                    WithholdingSlip.slip_type.in_(slip_types),
+                ),
+            )
+        )
+    if "faktur_keluaran" in effective:
+        sources.append((TaxInvoice, TaxInvoice.status == TaxInvoiceStatus.issued))
+    if "faktur_masukan" in effective:
+        sources.append(
+            (
+                TaxInputInvoice,
+                and_(
+                    TaxInputInvoice.credit_status == TaxInputCreditStatus.credited,
+                    TaxInputInvoice.status != TaxInvoiceStatus.invalid,
+                ),
+            )
+        )
+    if spt_types:
+        sources.append(
+            (
+                TaxReturn,
+                and_(
+                    TaxReturn.status == TaxReturnStatus.reported,
+                    TaxReturn.return_type.in_(spt_types),
+                ),
+            )
+        )
     for model, cond in sources:
         rows = session.exec(
             select(model.class_id, func.count())
@@ -170,6 +228,13 @@ def build_guru_dashboard(
     session: Session, guru: User, class_id: int | None
 ) -> GuruDashboard | None:
     """Returns None when ``class_id`` is not one of the guru's own classes."""
+    from app.core.deps import get_user_effective_modules
+    from app.core.modules import enabled_assignment_doc_types, enabled_spt_return_types
+
+    effective = get_user_effective_modules(session, guru)
+    slip_types = _enabled_slip_types(effective)
+    spt_types = enabled_spt_return_types(effective)
+
     own = session.exec(
         select(SchoolClass)
         .where(SchoolClass.guru_id == guru.id)
@@ -192,7 +257,7 @@ def build_guru_dashboard(
         if own_ids
         else {}
     )
-    pending = _pending_by_class(session, own_ids)
+    pending = _pending_by_class(session, own_ids, effective)
     options = [
         GuruClassOption(
             id=c.id,
@@ -231,67 +296,92 @@ def build_guru_dashboard(
         p["last"] = _maxdt(p["last"], last)
 
     if sids:
-        for sid, st, n, last in session.exec(
-            select(
-                WithholdingSlip.siswa_id,
-                WithholdingSlip.status,
-                func.count(),
-                func.max(WithholdingSlip.updated_at),
-            )
-            .where(WithholdingSlip.class_id == class_id, WithholdingSlip.siswa_id.in_(sids))
-            .group_by(WithholdingSlip.siswa_id, WithholdingSlip.status)
-        ).all():
-            if _val(st) == "issued":
-                touch(sid, "ebupot_issued", n, last)
-            elif _val(st) == "draft":
-                touch(sid, "ebupot_draft", n, last)
-            else:
-                touch(sid, "other", n, last)
-
-        for sid, st, n, last in session.exec(
-            select(
-                TaxInvoice.siswa_id,
-                TaxInvoice.status,
-                func.count(),
-                func.max(TaxInvoice.updated_at),
-            )
-            .where(TaxInvoice.class_id == class_id, TaxInvoice.siswa_id.in_(sids))
-            .group_by(TaxInvoice.siswa_id, TaxInvoice.status)
-        ).all():
-            touch(sid, "faktur_keluaran_issued" if _val(st) == "issued" else "other", n, last)
-
-        for sid, cs, n, last in session.exec(
-            select(
-                TaxInputInvoice.siswa_id,
-                TaxInputInvoice.credit_status,
-                func.count(),
-                func.max(TaxInputInvoice.updated_at),
-            )
-            .where(TaxInputInvoice.class_id == class_id, TaxInputInvoice.siswa_id.in_(sids))
-            .group_by(TaxInputInvoice.siswa_id, TaxInputInvoice.credit_status)
-        ).all():
-            touch(sid, "faktur_masukan_credited" if _val(cs) == "credited" else "other", n, last)
-
-        for sid, rt, st, n, last in session.exec(
-            select(
-                TaxReturn.siswa_id,
-                TaxReturn.return_type,
-                TaxReturn.status,
-                func.count(),
-                func.max(TaxReturn.updated_at),
-            )
-            .where(TaxReturn.class_id == class_id, TaxReturn.siswa_id.in_(sids))
-            .group_by(TaxReturn.siswa_id, TaxReturn.return_type, TaxReturn.status)
-        ).all():
-            if _val(st) == "reported":
-                key = {"ppn": "spt_ppn", "pph_unifikasi": "spt_pph_unifikasi"}.get(
-                    _val(rt), "spt_pph_21_26"
+        if slip_types:
+            for sid, st, n, last in session.exec(
+                select(
+                    WithholdingSlip.siswa_id,
+                    WithholdingSlip.status,
+                    func.count(),
+                    func.max(WithholdingSlip.updated_at),
                 )
-                touch(sid, "spt_reported", n, last)
-                touch(sid, key, 0, None)
-                prog[sid][key] += n
-            else:
-                touch(sid, "other", n, last)
+                .where(
+                    WithholdingSlip.class_id == class_id,
+                    WithholdingSlip.siswa_id.in_(sids),
+                    WithholdingSlip.slip_type.in_(slip_types),
+                )
+                .group_by(WithholdingSlip.siswa_id, WithholdingSlip.status)
+            ).all():
+                if _val(st) == "issued":
+                    touch(sid, "ebupot_issued", n, last)
+                elif _val(st) == "draft":
+                    touch(sid, "ebupot_draft", n, last)
+                else:
+                    touch(sid, "other", n, last)
+
+        if "faktur_keluaran" in effective:
+            for sid, st, n, last in session.exec(
+                select(
+                    TaxInvoice.siswa_id,
+                    TaxInvoice.status,
+                    func.count(),
+                    func.max(TaxInvoice.updated_at),
+                )
+                .where(TaxInvoice.class_id == class_id, TaxInvoice.siswa_id.in_(sids))
+                .group_by(TaxInvoice.siswa_id, TaxInvoice.status)
+            ).all():
+                touch(
+                    sid,
+                    "faktur_keluaran_issued" if _val(st) == "issued" else "other",
+                    n,
+                    last,
+                )
+
+        if "faktur_masukan" in effective:
+            for sid, cs, n, last in session.exec(
+                select(
+                    TaxInputInvoice.siswa_id,
+                    TaxInputInvoice.credit_status,
+                    func.count(),
+                    func.max(TaxInputInvoice.updated_at),
+                )
+                .where(
+                    TaxInputInvoice.class_id == class_id,
+                    TaxInputInvoice.siswa_id.in_(sids),
+                )
+                .group_by(TaxInputInvoice.siswa_id, TaxInputInvoice.credit_status)
+            ).all():
+                touch(
+                    sid,
+                    "faktur_masukan_credited" if _val(cs) == "credited" else "other",
+                    n,
+                    last,
+                )
+
+        if spt_types:
+            for sid, rt, st, n, last in session.exec(
+                select(
+                    TaxReturn.siswa_id,
+                    TaxReturn.return_type,
+                    TaxReturn.status,
+                    func.count(),
+                    func.max(TaxReturn.updated_at),
+                )
+                .where(
+                    TaxReturn.class_id == class_id,
+                    TaxReturn.siswa_id.in_(sids),
+                    TaxReturn.return_type.in_(spt_types),
+                )
+                .group_by(TaxReturn.siswa_id, TaxReturn.return_type, TaxReturn.status)
+            ).all():
+                if _val(st) == "reported":
+                    key = {"ppn": "spt_ppn", "pph_unifikasi": "spt_pph_unifikasi"}.get(
+                        _val(rt), "spt_pph_21_26"
+                    )
+                    touch(sid, "spt_reported", n, last)
+                    touch(sid, key, 0, None)
+                    prog[sid][key] += n
+                else:
+                    touch(sid, "other", n, last)
 
         for sid, n, last in session.exec(
             select(BillingCode.siswa_id, func.count(), func.max(BillingCode.updated_at))
@@ -309,7 +399,9 @@ def build_guru_dashboard(
     items: list[GradingItem] = []
     names = {s.id: s.full_name for s in students}
     pending_by_student: dict[int, int] = defaultdict(int)
-    (_, slip_w), (_, kel_w), (_, mas_w), (_, spt_w) = _guru_grading_conditions(class_id)
+    (_, slip_w), (_, kel_w), (_, mas_w), (_, spt_w) = _guru_grading_conditions(
+        class_id, effective
+    )
     for st_type, siswa_id, n in session.exec(
         select(WithholdingSlip.slip_type, WithholdingSlip.siswa_id, func.count())
         .where(slip_w)
@@ -416,15 +508,20 @@ def build_guru_dashboard(
                 has_activity=total > 0,
             )
         )
-    tugas_pending = session.exec(
-        select(func.count())
-        .select_from(AssignmentSubmission)
-        .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
-        .where(
-            Assignment.class_id == class_id,
-            AssignmentSubmission.final_score.is_(None),
-        )
-    ).one()
+    allowed_doc_types = enabled_assignment_doc_types(effective)
+    if "tugas" in effective and allowed_doc_types:
+        tugas_pending = session.exec(
+            select(func.count())
+            .select_from(AssignmentSubmission)
+            .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
+            .where(
+                Assignment.class_id == class_id,
+                Assignment.doc_type.in_(allowed_doc_types),
+                AssignmentSubmission.final_score.is_(None),
+            )
+        ).one()
+    else:
+        tugas_pending = 0
     return GuruDashboard(
         classes=options,
         class_id=class_id,
@@ -504,17 +601,34 @@ def _spt_doc(r: TaxReturn) -> SiswaDocument:
 
 
 def _newest(
-    session: Session, siswa_id: int, limit: int, *, scored: bool = False
+    session: Session,
+    siswa_id: int,
+    limit: int,
+    effective: set[str],
+    *,
+    scored: bool = False,
 ) -> list[SiswaDocument]:
-    """Newest documents across all four document tables (optionally only graded ones)."""
+    """Newest documents across enabled document tables (optionally only graded ones)."""
+    from app.core.modules import enabled_spt_return_types
+
     docs: list[SiswaDocument] = []
-    for model, conv in (
-        (WithholdingSlip, _slip_doc),
-        (TaxInvoice, _keluaran_doc),
-        (TaxInputInvoice, _masukan_doc),
-        (TaxReturn, _spt_doc),
-    ):
-        q = select(model).where(model.siswa_id == siswa_id)
+    slip_types = _enabled_slip_types(effective)
+    spt_types = enabled_spt_return_types(effective)
+
+    sources = []
+    if slip_types:
+        sources.append(
+            (WithholdingSlip, _slip_doc, [WithholdingSlip.slip_type.in_(slip_types)])
+        )
+    if "faktur_keluaran" in effective:
+        sources.append((TaxInvoice, _keluaran_doc, []))
+    if "faktur_masukan" in effective:
+        sources.append((TaxInputInvoice, _masukan_doc, []))
+    if spt_types:
+        sources.append((TaxReturn, _spt_doc, [TaxReturn.return_type.in_(spt_types)]))
+
+    for model, conv, extra_conds in sources:
+        q = select(model).where(model.siswa_id == siswa_id, *extra_conds)
         if scored:
             q = q.where(model.score.is_not(None))
         q = q.order_by(model.updated_at.desc()).limit(limit)
@@ -524,53 +638,67 @@ def _newest(
 
 
 def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
+    from app.core.deps import get_user_effective_modules
+    from app.core.modules import enabled_assignment_doc_types, enabled_spt_return_types
+
     sid = siswa.id
+    effective = get_user_effective_modules(session, siswa)
+    slip_types = _enabled_slip_types(effective)
+    spt_types = enabled_spt_return_types(effective)
+
     classes = session.exec(
         select(func.count()).select_from(Enrollment).where(Enrollment.siswa_id == sid)
     ).one()
 
     ebupot = StatusCounts()
     by_type: dict[str, StatusCounts] = {}
-    for st_type, st, n in session.exec(
-        select(WithholdingSlip.slip_type, WithholdingSlip.status, func.count())
-        .where(WithholdingSlip.siswa_id == sid)
-        .group_by(WithholdingSlip.slip_type, WithholdingSlip.status)
-    ).all():
-        bucket = by_type.setdefault(_val(st_type), StatusCounts())
-        setattr(bucket, _val(st), getattr(bucket, _val(st)) + n)
-        setattr(ebupot, _val(st), getattr(ebupot, _val(st)) + n)
-        bucket.total += n
-        ebupot.total += n
+    if slip_types:
+        for st_type, st, n in session.exec(
+            select(WithholdingSlip.slip_type, WithholdingSlip.status, func.count())
+            .where(
+                WithholdingSlip.siswa_id == sid,
+                WithholdingSlip.slip_type.in_(slip_types),
+            )
+            .group_by(WithholdingSlip.slip_type, WithholdingSlip.status)
+        ).all():
+            bucket = by_type.setdefault(_val(st_type), StatusCounts())
+            setattr(bucket, _val(st), getattr(bucket, _val(st)) + n)
+            setattr(ebupot, _val(st), getattr(ebupot, _val(st)) + n)
+            bucket.total += n
+            ebupot.total += n
 
     keluaran = StatusCounts()
-    for st, n in session.exec(
-        select(TaxInvoice.status, func.count())
-        .where(TaxInvoice.siswa_id == sid)
-        .group_by(TaxInvoice.status)
-    ).all():
-        setattr(keluaran, _val(st), n)
-        keluaran.total += n
+    if "faktur_keluaran" in effective:
+        for st, n in session.exec(
+            select(TaxInvoice.status, func.count())
+            .where(TaxInvoice.siswa_id == sid)
+            .group_by(TaxInvoice.status)
+        ).all():
+            setattr(keluaran, _val(st), n)
+            keluaran.total += n
 
     masukan = SiswaMasukanCounts()
-    for st, cs, n in session.exec(
-        select(TaxInputInvoice.status, TaxInputInvoice.credit_status, func.count())
-        .where(TaxInputInvoice.siswa_id == sid)
-        .group_by(TaxInputInvoice.status, TaxInputInvoice.credit_status)
-    ).all():
-        if _val(st) == "invalid":
-            continue
-        setattr(masukan, _val(cs), getattr(masukan, _val(cs)) + n)
-        masukan.total += n
+    if "faktur_masukan" in effective:
+        for st, cs, n in session.exec(
+            select(TaxInputInvoice.status, TaxInputInvoice.credit_status, func.count())
+            .where(TaxInputInvoice.siswa_id == sid)
+            .group_by(TaxInputInvoice.status, TaxInputInvoice.credit_status)
+        ).all():
+            if _val(st) == "invalid":
+                continue
+            setattr(masukan, _val(cs), getattr(masukan, _val(cs)) + n)
+            masukan.total += n
 
     spt = SiswaSptCounts()
-    for st, n in session.exec(
-        select(TaxReturn.status, func.count())
-        .where(TaxReturn.siswa_id == sid)
-        .group_by(TaxReturn.status)
-    ).all():
-        setattr(spt, _val(st), n)
-        spt.total += n
-    spt.unreported = spt.draft + spt.awaiting_payment
+    if spt_types:
+        for st, n in session.exec(
+            select(TaxReturn.status, func.count())
+            .where(TaxReturn.siswa_id == sid, TaxReturn.return_type.in_(spt_types))
+            .group_by(TaxReturn.status)
+        ).all():
+            setattr(spt, _val(st), n)
+            spt.total += n
+        spt.unreported = spt.draft + spt.awaiting_payment
 
     billing = SiswaBillingCounts()
     for st, n, amt in session.exec(
@@ -583,18 +711,33 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
             billing.unpaid_amount = int(amt)
         elif _val(st) == "paid":
             billing.paid = n
-    billing.tagihan_open = session.exec(
-        select(func.count())
-        .select_from(Tagihan)
-        .where(Tagihan.user_id == sid, Tagihan.status != TagihanStatus.lunas)
-    ).one()
+    if "tagihan" in effective:
+        billing.tagihan_open = session.exec(
+            select(func.count())
+            .select_from(Tagihan)
+            .where(Tagihan.user_id == sid, Tagihan.status != TagihanStatus.lunas)
+        ).one()
+    else:
+        billing.tagihan_open = 0
 
     grades = SiswaGradeStats()
     total_score = 0
-    for model in (WithholdingSlip, TaxInvoice, TaxInputInvoice, TaxReturn):
+    grade_sources = []
+    if slip_types:
+        grade_sources.append(
+            (WithholdingSlip, [WithholdingSlip.slip_type.in_(slip_types)])
+        )
+    if "faktur_keluaran" in effective:
+        grade_sources.append((TaxInvoice, []))
+    if "faktur_masukan" in effective:
+        grade_sources.append((TaxInputInvoice, []))
+    if spt_types:
+        grade_sources.append((TaxReturn, [TaxReturn.return_type.in_(spt_types)]))
+
+    for model, extra_conds in grade_sources:
         n, s = session.exec(
             select(func.count(), func.coalesce(func.sum(model.score), 0)).where(
-                model.siswa_id == sid, model.score.is_not(None)
+                model.siswa_id == sid, model.score.is_not(None), *extra_conds
             )
         ).one()
         grades.reviewed += n
@@ -604,60 +747,71 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
 
     # To-do list from real rows: drafts, unreported SPT, unpaid billing, uncredited masukan.
     todos: list[SiswaTodo] = []
-    for r in session.exec(
-        select(WithholdingSlip)
-        .where(WithholdingSlip.siswa_id == sid, WithholdingSlip.status == SlipStatus.draft)
-        .order_by(WithholdingSlip.updated_at.desc())
-        .limit(4)
-    ).all():
-        d = _slip_doc(r)
-        todos.append(
-            SiswaTodo(
-                kind="draft",
-                module=d.module,
-                id=d.id,
-                title=f"Terbitkan {d.module_label}: {d.title}",
-                detail=d.period,
-                module_label=d.module_label,
-                at=d.at,
+    if slip_types:
+        for r in session.exec(
+            select(WithholdingSlip)
+            .where(
+                WithholdingSlip.siswa_id == sid,
+                WithholdingSlip.status == SlipStatus.draft,
+                WithholdingSlip.slip_type.in_(slip_types),
             )
-        )
-    for r in session.exec(
-        select(TaxInvoice)
-        .where(TaxInvoice.siswa_id == sid, TaxInvoice.status == TaxInvoiceStatus.draft)
-        .order_by(TaxInvoice.updated_at.desc())
-        .limit(3)
-    ).all():
-        d = _keluaran_doc(r)
-        todos.append(
-            SiswaTodo(
-                kind="draft",
-                module=d.module,
-                id=d.id,
-                title=f"Terbitkan faktur keluaran: {d.title}",
-                detail=d.period,
-                module_label=d.module_label,
-                at=d.at,
+            .order_by(WithholdingSlip.updated_at.desc())
+            .limit(4)
+        ).all():
+            d = _slip_doc(r)
+            todos.append(
+                SiswaTodo(
+                    kind="draft",
+                    module=d.module,
+                    id=d.id,
+                    title=f"Terbitkan {d.module_label}: {d.title}",
+                    detail=d.period,
+                    module_label=d.module_label,
+                    at=d.at,
+                )
             )
-        )
-    for r in session.exec(
-        select(TaxReturn)
-        .where(TaxReturn.siswa_id == sid, TaxReturn.status != TaxReturnStatus.reported)
-        .order_by(TaxReturn.updated_at.desc())
-        .limit(4)
-    ).all():
-        d = _spt_doc(r)
-        todos.append(
-            SiswaTodo(
-                kind="spt",
-                module=d.module,
-                id=d.id,
-                title=f"Laporkan {d.title}",
-                detail=d.period,
-                module_label=d.module_label,
-                at=d.at,
+    if "faktur_keluaran" in effective:
+        for r in session.exec(
+            select(TaxInvoice)
+            .where(TaxInvoice.siswa_id == sid, TaxInvoice.status == TaxInvoiceStatus.draft)
+            .order_by(TaxInvoice.updated_at.desc())
+            .limit(3)
+        ).all():
+            d = _keluaran_doc(r)
+            todos.append(
+                SiswaTodo(
+                    kind="draft",
+                    module=d.module,
+                    id=d.id,
+                    title=f"Terbitkan faktur keluaran: {d.title}",
+                    detail=d.period,
+                    module_label=d.module_label,
+                    at=d.at,
+                )
             )
-        )
+    if spt_types:
+        for r in session.exec(
+            select(TaxReturn)
+            .where(
+                TaxReturn.siswa_id == sid,
+                TaxReturn.status != TaxReturnStatus.reported,
+                TaxReturn.return_type.in_(spt_types),
+            )
+            .order_by(TaxReturn.updated_at.desc())
+            .limit(4)
+        ).all():
+            d = _spt_doc(r)
+            todos.append(
+                SiswaTodo(
+                    kind="spt",
+                    module=d.module,
+                    id=d.id,
+                    title=f"Laporkan {d.title}",
+                    detail=d.period,
+                    module_label=d.module_label,
+                    at=d.at,
+                )
+            )
     for r in session.exec(
         select(BillingCode)
         .where(BillingCode.siswa_id == sid, BillingCode.status == BillingStatus.unpaid)
@@ -675,45 +829,51 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
                 at=r.updated_at,
             )
         )
-    for r in session.exec(
-        select(TaxInputInvoice)
-        .where(
-            TaxInputInvoice.siswa_id == sid,
-            TaxInputInvoice.credit_status == TaxInputCreditStatus.not_credited,
-            TaxInputInvoice.status != TaxInvoiceStatus.invalid,
-        )
-        .order_by(TaxInputInvoice.updated_at.desc())
-        .limit(3)
-    ).all():
-        d = _masukan_doc(r)
-        todos.append(
-            SiswaTodo(
-                kind="masukan",
-                module=d.module,
-                id=d.id,
-                title=f"Kreditkan faktur masukan: {d.title}",
-                detail=d.period,
-                module_label=d.module_label,
-                at=d.at,
+    if "faktur_masukan" in effective:
+        for r in session.exec(
+            select(TaxInputInvoice)
+            .where(
+                TaxInputInvoice.siswa_id == sid,
+                TaxInputInvoice.credit_status == TaxInputCreditStatus.not_credited,
+                TaxInputInvoice.status != TaxInvoiceStatus.invalid,
             )
-        )
+            .order_by(TaxInputInvoice.updated_at.desc())
+            .limit(3)
+        ).all():
+            d = _masukan_doc(r)
+            todos.append(
+                SiswaTodo(
+                    kind="masukan",
+                    module=d.module,
+                    id=d.id,
+                    title=f"Kreditkan faktur masukan: {d.title}",
+                    detail=d.period,
+                    module_label=d.module_label,
+                    at=d.at,
+                )
+            )
 
     # Open assignments (published in enrolled classes without a submission from this siswa)
-    enrolled_cids = select(Enrollment.class_id).where(Enrollment.siswa_id == sid)
-    submitted_aids = select(AssignmentSubmission.assignment_id).where(
-        AssignmentSubmission.siswa_id == sid
-    )
-    open_assignments = list(
-        session.exec(
-            select(Assignment)
-            .where(
-                Assignment.class_id.in_(enrolled_cids),
-                Assignment.status == AssignmentStatus.published,
-                Assignment.id.not_in(submitted_aids),
-            )
-            .order_by(Assignment.due_at.asc().nulls_last(), Assignment.id.desc())
-        ).all()
-    )
+    allowed_doc_types = enabled_assignment_doc_types(effective)
+    if "tugas" in effective and allowed_doc_types:
+        enrolled_cids = select(Enrollment.class_id).where(Enrollment.siswa_id == sid)
+        submitted_aids = select(AssignmentSubmission.assignment_id).where(
+            AssignmentSubmission.siswa_id == sid
+        )
+        open_assignments = list(
+            session.exec(
+                select(Assignment)
+                .where(
+                    Assignment.class_id.in_(enrolled_cids),
+                    Assignment.status == AssignmentStatus.published,
+                    Assignment.doc_type.in_(allowed_doc_types),
+                    Assignment.id.not_in(submitted_aids),
+                )
+                .order_by(Assignment.due_at.asc().nulls_last(), Assignment.id.desc())
+            ).all()
+        )
+    else:
+        open_assignments = []
     open_tugas_count = len(open_assignments)
     for a in open_assignments[:4]:
         due_str = (
@@ -754,9 +914,10 @@ def build_siswa_dashboard(session: Session, siswa: User) -> SiswaDashboard:
         todos=todos,
         todo_total=todo_total,
         open_tugas_count=open_tugas_count,
-        recent=_newest(session, sid, 6),
-        graded=_newest(session, sid, 4, scored=True),
+        recent=_newest(session, sid, 6, effective),
+        graded=_newest(session, sid, 4, effective, scored=True),
     )
+
 
 
 # --- Tenants --------------------------------------------------------------------

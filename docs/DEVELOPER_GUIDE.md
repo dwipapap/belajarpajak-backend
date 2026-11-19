@@ -1334,3 +1334,12 @@ Status `draft`/`awaiting_payment`/`reported`. Lapor selalu lewat
   - `GET /api/v1/tugas/{id}/export?format=xlsx|csv` & `GET /api/v1/tugas/rekap-kelas/{class_id}/export?format=xlsx|csv` (dibangun dengan `openpyxl` + `csv` stdlib).
 - **Watermark PDF Simulasi Pembelajaran** (`app/services/pdf_kit.py::draw_learning_watermark`): Dipanggil pada setiap halaman PDF bukti potong (`slip_pdf.py`), faktur pajak keluaran normal maupun batal/tidak sah (`faktur_pdf.py`), kode billing (`billing_pdf.py`), BPE SPT (`spt_bpe_pdf.py`), dan SPT Masa PPN / PPh Unifikasi / PPh 21/26 (`spt_pdf.py` & `spt_pdf_ppn.py`).
 
+**Pengaturan Instansi** (`app/routers/pengaturan.py`, prefix `/pengaturan`, katalog `app/core/modules.py`, migrasi `e016pengaturaninstansi`):
+- Kolom nullable JSONB pada `tenants`: `allowed_modules` (paket modul oleh superadmin), `enabled_modules` (pilihan admin sekolah), dan `settings` (pengaturan pembelajaran). `NULL` berarti semua modul aktif / pengaturan default.
+- Modul efektif = `allowed_modules ∩ enabled_modules`. Dikembalikan pada `GET /api/v1/auth/me` (`enabled_modules` dan `settings`).
+- Dependency `require_module(module_key)` pada router modul menolak akses `siswa`/`guru`/`admin` dengan HTTP 403 (`"Modul <label> tidak aktif untuk instansi Anda"`) bila modul tidak aktif; `superadmin` tidak pernah diblokir.
+- Endpoint:
+  - `GET /api/v1/pengaturan` (`admin` untuk instansinya sendiri; `superadmin` dengan `?tenant_id=`)
+  - `PATCH /api/v1/pengaturan` (`enabled_modules` wajib subset dari `allowed_modules`, serta `settings`: `show_auto_check_details`, `allow_late_submission`, `allow_resubmission`)
+  - `PATCH /api/v1/pengaturan/paket?tenant_id=` & `PATCH /api/v1/tenants/{id}` (`superadmin` mengubah `allowed_modules`).
+

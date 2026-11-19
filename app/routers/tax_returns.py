@@ -84,11 +84,17 @@ def apply_access_filters(query, current_user: User):
 def _get_accessible_return(
     return_id: int, current_user: CurrentUser, session: SessionDep
 ) -> TaxReturn:
+    from app.core.deps import ensure_module_enabled
+    from app.core.modules import spt_return_type_to_module
+
     tax_return = session.get(TaxReturn, return_id)
     if tax_return is None or not can_read_return(session, current_user, tax_return):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"{LABEL} tidak ditemukan"
         )
+    ensure_module_enabled(
+        session, current_user, spt_return_type_to_module(tax_return.return_type)
+    )
     return tax_return
 
 
@@ -132,9 +138,23 @@ def list_returns(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> TaxReturnListResponse:
+    from app.core.deps import ensure_module_enabled, get_user_effective_modules
+    from app.core.modules import enabled_spt_return_types, spt_return_type_to_module
+
     conditions = []
     if return_type is not None:
+        ensure_module_enabled(
+            session, current_user, spt_return_type_to_module(return_type)
+        )
         conditions.append(TaxReturn.return_type == return_type)
+    elif current_user.role != Role.superadmin:
+        allowed_types = enabled_spt_return_types(
+            get_user_effective_modules(session, current_user)
+        )
+        if not allowed_types:
+            return TaxReturnListResponse(items=[], total=0)
+        conditions.append(TaxReturn.return_type.in_(allowed_types))
+
     if status_filter is not None:
         conditions.append(TaxReturn.status == status_filter)
     if current_user.role == Role.superadmin and tenant_id is not None:
@@ -174,10 +194,27 @@ def return_summary(
     session: SessionDep,
     return_type: TaxReturnType | None = None,
 ) -> TaxReturnSummary:
+    from app.core.deps import ensure_module_enabled, get_user_effective_modules
+    from app.core.modules import enabled_spt_return_types, spt_return_type_to_module
+
+    type_conds = []
+    if return_type is not None:
+        ensure_module_enabled(
+            session, current_user, spt_return_type_to_module(return_type)
+        )
+        type_conds.append(TaxReturn.return_type == return_type)
+    elif current_user.role != Role.superadmin:
+        allowed_types = enabled_spt_return_types(
+            get_user_effective_modules(session, current_user)
+        )
+        if not allowed_types:
+            return TaxReturnSummary(draft=0, awaiting_payment=0, reported=0, total=0)
+        type_conds.append(TaxReturn.return_type.in_(allowed_types))
+
     query = apply_access_filters(
         select(TaxReturn.status, func.count())
         .select_from(TaxReturn)
-        .where(*([] if return_type is None else [TaxReturn.return_type == return_type]))
+        .where(*type_conds)
         .group_by(TaxReturn.status),
         current_user,
     )
@@ -201,6 +238,12 @@ def create_return(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> TaxReturnRead:
+    from app.core.deps import ensure_module_enabled
+    from app.core.modules import spt_return_type_to_module
+
+    ensure_module_enabled(
+        session, current_user, spt_return_type_to_module(data.return_type)
+    )
     _reject_future_period(data.tax_year, data.tax_month)
 
     siswa_id = (
@@ -266,6 +309,7 @@ def get_return(
     session: SessionDep,
 ) -> TaxReturnRead:
     return return_to_read(session, _get_accessible_return(return_id, current_user, session))
+
 
 
 @router.post("/{return_id}/posting", response_model=TaxReturnRead, dependencies=[_write_roles])

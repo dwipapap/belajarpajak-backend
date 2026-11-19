@@ -27,6 +27,7 @@ The frontend lives in a **separate repository**: `../frontend` in the workspace 
 - Audit trail: `AuditLog` (`/audit-logs`) for submit/review/pay actions.
 - Tax reference data: PTKP tiers and Pasal 17 progressive brackets used by BP21 non-final calculations.
 - Classroom workflow: siswa create/issue slips/faktur/SPT, guru/admin review and score, tenant scoping enforced server-side.
+- Pengaturan Instansi (`/pengaturan`): two-level module gating (superadmin configures per-tenant `allowed_modules` package via `PATCH /pengaturan/paket` or `PATCH /tenants/{id}`; school admin toggles `enabled_modules` within that package via `PATCH /pengaturan`, effective = `allowed ∩ enabled`) plus learning settings (`show_auto_check_details`, `allow_late_submission`, `allow_resubmission`) enforced on Tugas and exposed via `/auth/me`.
 
 ## Prerequisites
 

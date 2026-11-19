@@ -52,6 +52,8 @@ class TenantUpdate(BaseModel):
     #: Slug is immutable — accepted by the schema only so the router can
     #: reject it explicitly with a clear 422 message.
     slug: str | None = Field(default=None, min_length=2, max_length=80)
+    #: Superadmin module package (NULL = all modules allowed).
+    allowed_modules: list[str] | None = None
 
 
 class TenantStatusUpdate(BaseModel):
@@ -75,8 +77,10 @@ class TenantRead(BaseModel):
     max_siswa: int | None
     max_kelas: int | None
     deactivated_reason: str | None
+    allowed_modules: list[str] | None = None
 
     model_config = {"from_attributes": True}
+
 
 
 class TenantQuotaUsage(BaseModel):

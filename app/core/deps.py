@@ -83,3 +83,50 @@ def tenant_filter[T](query: SelectOfScalar[T], user: User, model: type) -> Selec
     if user.role == Role.superadmin:
         return query
     return query.where(model.tenant_id == user.tenant_id)
+
+
+def get_user_effective_modules(session: Session, user: User) -> set[str]:
+    """Return effective enabled module keys for ``user`` (superadmin gets all)."""
+    from app.core.modules import ALL_MODULE_SET, resolve_effective_modules
+    from app.models.tenant import Tenant
+
+    if user.role == Role.superadmin or user.tenant_id is None:
+        return set(ALL_MODULE_SET)
+    tenant = session.get(Tenant, user.tenant_id)
+    return set(resolve_effective_modules(tenant))
+
+
+def get_user_tenant_settings(session: Session, user: User) -> dict[str, bool]:
+    """Return effective learning settings for ``user``'s tenant."""
+    from app.core.modules import DEFAULT_SETTINGS, resolve_tenant_settings
+    from app.models.tenant import Tenant
+
+    if user.role == Role.superadmin or user.tenant_id is None:
+        return dict(DEFAULT_SETTINGS)
+    tenant = session.get(Tenant, user.tenant_id)
+    return resolve_tenant_settings(tenant)
+
+
+def ensure_module_enabled(session: Session, user: User, module_key: str) -> None:
+    """Raise 403 if ``module_key`` is not enabled for ``user``'s tenant."""
+    from app.core.modules import module_label
+
+    if user.role == Role.superadmin or user.tenant_id is None:
+        return
+    effective = get_user_effective_modules(session, user)
+    if module_key not in effective:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Modul {module_label(module_key)} tidak aktif untuk instansi Anda",
+        )
+
+
+def require_module(module_key: str) -> Callable[..., User]:
+    """Dependency factory that gates an endpoint/router on ``module_key``."""
+
+    def _guard(current_user: CurrentUser, session: SessionDep) -> User:
+        ensure_module_enabled(session, current_user, module_key)
+        return current_user
+
+    return _guard
+

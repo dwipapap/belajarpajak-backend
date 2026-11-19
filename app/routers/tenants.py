@@ -130,7 +130,11 @@ def create_tenant(data: TenantCreate, session: SessionDep, current_user: Current
 
 
 @router.patch("/{tenant_id}", response_model=TenantRead, dependencies=[_superadmin])
-def update_tenant(tenant_id: int, data: TenantUpdate, session: SessionDep) -> Tenant:
+def update_tenant(
+    tenant_id: int, data: TenantUpdate, session: SessionDep, current_user: CurrentUser
+) -> Tenant:
+    from app.core.modules import ALL_MODULE_KEYS, ALL_MODULE_SET
+
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant tidak ditemukan")
@@ -140,6 +144,33 @@ def update_tenant(tenant_id: int, data: TenantUpdate, session: SessionDep) -> Te
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Slug instansi tidak dapat diubah",
+        )
+    if "allowed_modules" in payload:
+        raw_allowed = payload.pop("allowed_modules")
+        if raw_allowed is not None:
+            invalid = [m for m in raw_allowed if m not in ALL_MODULE_SET]
+            if invalid:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Kode modul tidak dikenal: {', '.join(invalid)}",
+                )
+            allowed_set = set(raw_allowed)
+            normalized = [k for k in ALL_MODULE_KEYS if k in allowed_set]
+            tenant.allowed_modules = None if len(normalized) == len(ALL_MODULE_KEYS) else normalized
+            summary_list = "semua modul" if tenant.allowed_modules is None else (
+                ", ".join(normalized) if normalized else "tidak ada modul"
+            )
+        else:
+            tenant.allowed_modules = None
+            summary_list = "semua modul"
+        log_action(
+            session,
+            actor=current_user,
+            action="pengaturan.paket",
+            entity="tenant",
+            entity_id=tenant.id,
+            tenant_id=tenant.id,
+            summary=f"Mengubah paket modul instansi {tenant.name}: {summary_list}",
         )
     months = payload.pop("masa_berlaku_bulan", None)
     explicit_dari = payload.pop("berlaku_dari", None)
@@ -185,6 +216,7 @@ def update_tenant(tenant_id: int, data: TenantUpdate, session: SessionDep) -> Te
     session.commit()
     session.refresh(tenant)
     return tenant
+
 
 
 @router.post("/{tenant_id}/deactivate", response_model=TenantRead, dependencies=[_superadmin])

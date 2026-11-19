@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from sqlalchemy import Column, Date
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field
 
 from app.models.base import TimestampMixin
@@ -40,3 +42,17 @@ class Tenant(TimestampMixin, table=True):
 
     #: Reason recorded when the instance is deactivated (audit trail).
     deactivated_reason: str | None = Field(default=None, max_length=255)
+
+    #: Superadmin module package (NULL = all modules allowed).
+    allowed_modules: list[str] | None = Field(
+        default=None, sa_column=Column(JSONB(), nullable=True)
+    )
+    #: School admin active modules within allowed_modules (NULL = all allowed).
+    enabled_modules: list[str] | None = Field(
+        default=None, sa_column=Column(JSONB(), nullable=True)
+    )
+    #: Learning settings dict (NULL = defaults).
+    settings: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(), nullable=True)
+    )
+

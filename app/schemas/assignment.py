@@ -77,11 +77,13 @@ class SubmissionRead(BaseModel):
     is_late: bool = False
     auto_score: int | None = None
     auto_checks: list[AutoCheckRead] = Field(default_factory=list)
+    auto_checks_hidden: bool = False
     final_score: int | None = None
     displayed_score: int | None = None
     teacher_feedback: str | None = None
     graded_by: int | None = None
     graded_at: datetime | None = None
+
 
 
 class AssignmentRead(BaseModel):
