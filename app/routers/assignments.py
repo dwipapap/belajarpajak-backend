@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
-from zoneinfo import ZoneInfo
 import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from openpyxl import Workbook
@@ -277,6 +277,8 @@ def _build_submission_read(
     assignment: Assignment,
     siswa: User,
     sub: AssignmentSubmission | None,
+    *,
+    hide_auto_checks: bool = False,
 ) -> SubmissionRead:
     nis = siswa.username or siswa.email
     if sub is None:
@@ -294,7 +296,10 @@ def _build_submission_read(
         assignment.doc_type, doc
     )
     displayed = sub.final_score if sub.final_score is not None else sub.auto_score
-    checks = [AutoCheckRead.model_validate(c) for c in (sub.auto_checks or [])]
+    if hide_auto_checks:
+        checks: list[AutoCheckRead] = []
+    else:
+        checks = [AutoCheckRead.model_validate(c) for c in (sub.auto_checks or [])]
     return SubmissionRead(
         id=sub.id,
         assignment_id=assignment.id,
@@ -312,12 +317,22 @@ def _build_submission_read(
         is_late=sub.is_late,
         auto_score=sub.auto_score,
         auto_checks=checks,
+        auto_checks_hidden=hide_auto_checks,
         final_score=sub.final_score,
         displayed_score=displayed,
         teacher_feedback=sub.teacher_feedback,
         graded_by=sub.graded_by,
         graded_at=sub.graded_at,
     )
+
+
+def _should_hide_auto_checks(session: Session, user: User) -> bool:
+    from app.core.deps import get_user_tenant_settings
+
+    if user.role != Role.siswa:
+        return False
+    settings = get_user_tenant_settings(session, user)
+    return not settings.get("show_auto_check_details", True)
 
 
 def _build_assignment_read(
@@ -336,8 +351,9 @@ def _build_assignment_read(
     my_sub_read: SubmissionRead | None = None
     if current_user.role == Role.siswa:
         my_sub = sub_by_siswa.get(current_user.id)
+        hide = _should_hide_auto_checks(session, current_user)
         my_sub_read = _build_submission_read(
-            session, assignment, current_user, my_sub
+            session, assignment, current_user, my_sub, hide_auto_checks=hide
         )
 
     return AssignmentRead(
@@ -407,6 +423,9 @@ def list_assignments(
     doc_type: AssignmentDocType | None = None,
     tenant_id: int | None = None,
 ) -> list[AssignmentRead]:
+    from app.core.deps import get_user_effective_modules
+    from app.core.modules import enabled_assignment_doc_types
+
     stmt = select(Assignment)
 
     if current_user.role == Role.superadmin:
@@ -424,6 +443,11 @@ def list_assignments(
             Assignment.class_id.in_(taught_ids),
         )
     elif current_user.role == Role.siswa:
+        allowed_doc_types = enabled_assignment_doc_types(
+            get_user_effective_modules(session, current_user)
+        )
+        if not allowed_doc_types:
+            return []
         enrolled_class_ids = select(Enrollment.class_id).where(
             Enrollment.siswa_id == current_user.id
         )
@@ -433,6 +457,7 @@ def list_assignments(
             Assignment.status.in_(
                 [AssignmentStatus.published, AssignmentStatus.closed]
             ),
+            Assignment.doc_type.in_(allowed_doc_types),
         )
 
     if class_id is not None:
@@ -458,6 +483,12 @@ def create_assignment(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> AssignmentRead:
+    from app.core.deps import ensure_module_enabled
+    from app.core.modules import assignment_doc_type_to_module
+
+    ensure_module_enabled(
+        session, current_user, assignment_doc_type_to_module(data.doc_type)
+    )
     sc = session.get(SchoolClass, data.class_id)
     if (
         sc is None
@@ -510,6 +541,7 @@ def create_assignment(
     session.commit()
     session.refresh(assignment)
     return _build_assignment_read(session, assignment, current_user)
+
 
 
 # ---------------------------------------------------------------------------
@@ -707,12 +739,19 @@ def get_assignment(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> AssignmentDetailRead:
+    from app.core.deps import ensure_module_enabled
+    from app.core.modules import assignment_doc_type_to_module
+
     assignment = session.get(Assignment, assignment_id)
     if assignment is None or not _can_access_assignment(
         session, current_user, assignment
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Tugas tidak ditemukan"
+        )
+    if current_user.role == Role.siswa:
+        ensure_module_enabled(
+            session, current_user, assignment_doc_type_to_module(assignment.doc_type)
         )
     return _build_assignment_detail(session, assignment, current_user)
 
@@ -728,6 +767,9 @@ def update_assignment(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> AssignmentRead:
+    from app.core.deps import ensure_module_enabled
+    from app.core.modules import assignment_doc_type_to_module
+
     assignment = _require_guru_owned_assignment(session, current_user, assignment_id)
 
     payload = data.model_dump(exclude_unset=True)
@@ -757,6 +799,9 @@ def update_assignment(
             assignment.class_id = new_class_id
 
     if "doc_type" in payload and payload["doc_type"] is not None:
+        ensure_module_enabled(
+            session, current_user, assignment_doc_type_to_module(payload["doc_type"])
+        )
         new_dtype = payload["doc_type"].value
         if new_dtype != assignment.doc_type:
             has_subs = session.exec(
@@ -902,6 +947,9 @@ def list_candidate_documents(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> list[CandidateDocRead]:
+    from app.core.deps import ensure_module_enabled
+    from app.core.modules import assignment_doc_type_to_module
+
     assignment = session.get(Assignment, assignment_id)
     if assignment is None or not _can_access_assignment(
         session, current_user, assignment
@@ -909,6 +957,9 @@ def list_candidate_documents(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Tugas tidak ditemukan"
         )
+    ensure_module_enabled(
+        session, current_user, assignment_doc_type_to_module(assignment.doc_type)
+    )
     return _list_student_candidate_docs(
         session,
         tenant_id=current_user.tenant_id,
@@ -928,6 +979,9 @@ def submit_assignment(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> SubmissionRead:
+    from app.core.deps import ensure_module_enabled, get_user_tenant_settings
+    from app.core.modules import assignment_doc_type_to_module
+
     assignment = session.get(Assignment, assignment_id)
     if assignment is None or not _can_access_assignment(
         session, current_user, assignment
@@ -935,6 +989,9 @@ def submit_assignment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Tugas tidak ditemukan"
         )
+    ensure_module_enabled(
+        session, current_user, assignment_doc_type_to_module(assignment.doc_type)
+    )
     if assignment.status == AssignmentStatus.closed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -946,6 +1003,7 @@ def submit_assignment(
             detail="Tugas belum dipublikasikan",
         )
 
+    settings = get_user_tenant_settings(session, current_user)
     existing = session.exec(
         select(AssignmentSubmission).where(
             AssignmentSubmission.assignment_id == assignment.id,
@@ -956,6 +1014,19 @@ def submit_assignment(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Pengumpulan sudah dinilai oleh guru dan tidak dapat dikirim ulang",
+        )
+    if existing is not None and not settings.get("allow_resubmission", True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pengiriman ulang tugas tidak diizinkan untuk instansi Anda",
+        )
+
+    now = datetime.now(UTC)
+    is_late = _compute_is_late(assignment.due_at, now)
+    if is_late and not settings.get("allow_late_submission", True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenggat sudah lewat",
         )
 
     doc = _resolve_document(session, assignment.doc_type, data.doc_id)
@@ -969,8 +1040,6 @@ def submit_assignment(
             detail="Dokumen tidak ditemukan atau bukan milik Anda untuk tipe tugas ini",
         )
 
-    now = datetime.now(UTC)
-    is_late = _compute_is_late(assignment.due_at, now)
     auto_score, auto_checks = auto_grade_document(session, assignment.doc_type, doc)
 
     if existing is None:
@@ -1009,7 +1078,11 @@ def submit_assignment(
     )
     session.commit()
     session.refresh(submission)
-    return _build_submission_read(session, assignment, current_user, submission)
+    hide = not settings.get("show_auto_check_details", True)
+    return _build_submission_read(
+        session, assignment, current_user, submission, hide_auto_checks=hide
+    )
+
 
 
 @router.patch(

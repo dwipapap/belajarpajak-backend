@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.deps import require_module
 from app.routers import (
     a1_a2,
     angsuran,
@@ -20,6 +21,7 @@ from app.routers import (
     deposit,
     dokumen_saya,
     pbk,
+    pengaturan,
     referensi,
     slips,
     tagihan,
@@ -66,35 +68,45 @@ def create_app() -> FastAPI:
     for router in (
         auth.router,
         tenants.router,
+        pengaturan.router,
         users.router,
         classes.router,
-        assignments.router,
-        slips.bp21_router,
-        slips.bp26_router,
-        slips.bppu_router,
-        slips.bpmp_router,
-        slips.bpnr_router,
-        slips.sp_router,
-        slips.cy_router,
-        a1_a2.a1_router,
-        a1_a2.a2_router,
-        tax_invoices.router,
-        tax_input_invoices.router,
-        tax_invoice_returns.router,
-        tax_invoice_returns.keluaran_router,
         tax_returns.router,
         billings.router,
-        deposit.router,
         dokumen_saya.router,
-        pbk.router,
-        tagihan.router,
-        angsuran.router,
         audit.router,
         tarif_pajak.router,
         dashboard.router,
         referensi.router,
     ):
         app.include_router(router, prefix=API_PREFIX)
+
+    gated_routers = (
+        (assignments.router, "tugas"),
+        (slips.bp21_router, "bp21"),
+        (slips.bp26_router, "bp26"),
+        (slips.bppu_router, "bppu"),
+        (slips.bpmp_router, "bpmp"),
+        (slips.bpnr_router, "bpnr"),
+        (slips.sp_router, "sp"),
+        (slips.cy_router, "cy"),
+        (a1_a2.a1_router, "bpmp"),
+        (a1_a2.a2_router, "bpmp"),
+        (tax_invoices.router, "faktur_keluaran"),
+        (tax_input_invoices.router, "faktur_masukan"),
+        (tax_invoice_returns.router, "retur"),
+        (tax_invoice_returns.keluaran_router, "retur"),
+        (deposit.router, "deposit"),
+        (pbk.router, "pbk"),
+        (tagihan.router, "tagihan"),
+        (angsuran.router, "angsuran"),
+    )
+    for router, module_key in gated_routers:
+        app.include_router(
+            router,
+            prefix=API_PREFIX,
+            dependencies=[Depends(require_module(module_key))],
+        )
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
@@ -104,3 +116,4 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
