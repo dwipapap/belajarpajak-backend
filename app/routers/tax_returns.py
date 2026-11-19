@@ -389,7 +389,7 @@ def submit_return(
     if not verify_password(data.passphrase, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Passphrase tidak valid",
+            detail="Kata sandi penandatanganan salah. Untuk SPT gunakan kata sandi akun Anda.",
         )
 
     # Numbers must reflect the documents as of this moment.
