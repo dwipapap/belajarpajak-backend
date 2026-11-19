@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # pydantic-settings does not attempt to JSON-decode it from the .env file).
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    # Login protection: failed attempts allowed per window before HTTP 429.
+    LOGIN_RATE_LIMIT_ENABLED: bool = True
+    LOGIN_MAX_FAILURES_PER_ACCOUNT: int = 5
+    LOGIN_MAX_FAILURES_PER_IP: int = 50
+    LOGIN_LOCKOUT_MINUTES: int = 15
+
+    # Interactive API docs (/docs, /redoc, /openapi.json). None means: on for
+    # local environments (development/test), off everywhere else.
+    API_DOCS_ENABLED: bool | None = None
+
     # Behaviour
     AUTO_SEED: bool = True
     # Password for every seeded account. Override it on any shared server.
@@ -46,6 +56,12 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.API_DOCS_ENABLED is not None:
+            return self.API_DOCS_ENABLED
+        return self.APP_ENV.lower() in LOCAL_ENVS
 
     @property
     def is_production(self) -> bool:

@@ -62,6 +62,14 @@ def _ensure_seed() -> None:
             session.commit()
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_limiter() -> None:
+    """Failed-login counters are process-wide; isolate every test."""
+    from app.core.rate_limit import login_limiter
+
+    login_limiter.clear()
+
+
 @pytest.fixture()
 def client() -> TestClient:
     return TestClient(app)
