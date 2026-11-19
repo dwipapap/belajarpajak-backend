@@ -55,6 +55,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Multi-tenant tax administration learning simulator API.",
         lifespan=lifespan,
+        docs_url="/docs" if settings.api_docs_enabled else None,
+        redoc_url="/redoc" if settings.api_docs_enabled else None,
+        openapi_url="/openapi.json" if settings.api_docs_enabled else None,
     )
 
     app.add_middleware(

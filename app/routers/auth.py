@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import date
 
 import jwt
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlmodel import select
 
+from app.core.config import settings
 from app.core.deps import CurrentUser, SessionDep
+from app.core.rate_limit import login_limiter
 from app.core.security import (
     TOKEN_TYPE_REFRESH,
     create_access_token,
@@ -82,12 +84,34 @@ def _ensure_login_allowed(user: User, session: SessionDep) -> None:
             raise _TENANT_EXPIRED
 
 
+def _ensure_not_rate_limited(identifier: str, ip: str | None) -> None:
+    if not settings.LOGIN_RATE_LIMIT_ENABLED:
+        return
+    wait = login_limiter.retry_after(identifier, ip)
+    if wait is not None:
+        minutes = max(1, -(-wait // 60))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Terlalu banyak percobaan masuk yang gagal. Coba lagi dalam {minutes} menit.",
+            headers={"Retry-After": str(wait)},
+        )
+
+
 @router.post("/login", response_model=TokenPair)
-def login(data: LoginRequest, session: SessionDep) -> TokenPair:
-    user = _resolve_login_user(session, data)
+def login(data: LoginRequest, session: SessionDep, request: Request) -> TokenPair:
+    identifier = data.identifier.strip()
+    ip = request.client.host if request.client else None
+    _ensure_not_rate_limited(identifier, ip)
+    try:
+        user = _resolve_login_user(session, data)
+        if not verify_password(data.password, user.password_hash):
+            raise _INVALID_CREDENTIALS
+    except HTTPException:
+        if settings.LOGIN_RATE_LIMIT_ENABLED:
+            login_limiter.record_failure(identifier, ip)
+        raise
     _ensure_login_allowed(user, session)
-    if not verify_password(data.password, user.password_hash):
-        raise _INVALID_CREDENTIALS
+    login_limiter.reset_identifier(identifier)
     return TokenPair(
         access_token=create_access_token(
             user_id=user.id, role=user.role.value, tenant_id=user.tenant_id

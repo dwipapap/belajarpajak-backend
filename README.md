@@ -24,6 +24,7 @@ The frontend lives in a **separate repository**: `../frontend` in the workspace 
 - Simulated SPT Masa: PPN + PPh Unifikasi + PPh 21/26 (`/spt`, types `ppn` / `pph_unifikasi` / `pph_21_26` (BPMP aggregate) / `pph21_26` (SIM-TER/progresif)) with posting, pernyataan, submit (pay via billing or deposit), pembetulan, billing linkage, review.
 - Billing & payment: server-side `BillingCode` (`/billings`) with multi-detail `BillingLine` per KJS, pay flow recording kanal + NTPN + No BPN, PDF generation (`billing_pdf.py`), KAP-KJS helper (`kjs.py`, PPN Masa = 411211-100, PPh 23 per object).
 - Payment services: Deposit Pajak (`/deposit`, wallet + idempotent mutations, top-up = billing mandiri 411618-100), Pemindahbukuan (`/pbk`, guru/admin approve or reject), Tagihan SKP/STP (`/tagihan`, issued by guru/admin, settled through a billing), Angsuran (`/angsuran`, 2–12 cicilan).
+- Login protection: after 5 failed logins for one email/NIS (or 50 from one IP) within 15 minutes the API answers 429 until the window passes (`LOGIN_*` settings). Interactive API docs (`/docs`, `/redoc`, `/openapi.json`) are served only when `APP_ENV` is `development`/`test`, or when `API_DOCS_ENABLED=true`.
 - Audit trail: `AuditLog` (`/audit-logs`) for submit/review/pay actions.
 - Tax reference data: PTKP tiers and Pasal 17 progressive brackets used by BP21 non-final calculations.
 - Classroom workflow: siswa create/issue slips/faktur/SPT, guru/admin review and score, tenant scoping enforced server-side.
