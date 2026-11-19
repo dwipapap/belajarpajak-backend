@@ -81,6 +81,8 @@ def test_export_assignment_and_class_rekap_xlsx_and_csv(client: TestClient):
     )
     wb = load_workbook(io.BytesIO(xlsx_res.content))
     ws = wb.active
+    assert ws.page_setup.orientation == "landscape"
+    assert ws.freeze_panes == "A2"
     rows = list(ws.iter_values() if hasattr(ws, "iter_values") else ws.values)
     assert rows[0] == (
         "Nama",

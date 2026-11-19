@@ -534,6 +534,13 @@ def _render_xlsx(sheet_title: str, headers: list[str], rows: list[list[Any]]) ->
     ws = wb.active
     ws.title = sheet_title[:31]
 
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.freeze_panes = "A2"
+    ws.print_title_rows = "1:1"
+
     header_fill = PatternFill(start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF", size=11)
     thin = Side(border_style="thin", color="D1D5DB")
