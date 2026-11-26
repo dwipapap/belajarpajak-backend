@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from app.models.audit_log import AuditLog
@@ -43,6 +44,7 @@ def list_logs(
     tenant_id: int | None = None,
     action: str | None = None,
     entity: str | None = None,
+    q: str | None = None,
     page: int = 1,
     size: int = 50,
 ) -> tuple[list[AuditLog], int]:
@@ -54,6 +56,14 @@ def list_logs(
         conditions.append(AuditLog.action == action)
     if entity is not None:
         conditions.append(AuditLog.entity == entity)
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        conditions.append(
+            or_(
+                AuditLog.actor_email.ilike(pattern),
+                AuditLog.summary.ilike(pattern),
+            )
+        )
 
     base = select(AuditLog).where(*conditions)
     from sqlmodel import func

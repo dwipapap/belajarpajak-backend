@@ -177,6 +177,7 @@ class TenantOverview(BaseModel):
     siswa: QuotaUsage
     kelas: QuotaUsage
     active_classes: int
+    unenrolled_siswa: int = 0
 
 
 class PlatformDashboard(BaseModel):

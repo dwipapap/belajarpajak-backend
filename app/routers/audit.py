@@ -46,6 +46,7 @@ def list_audit_logs(
     tenant_id: int | None = None,
     action: str | None = None,
     entity: str | None = None,
+    q: str | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> AuditLogListResponse:
@@ -57,6 +58,7 @@ def list_audit_logs(
         tenant_id=effective_tenant,
         action=action,
         entity=entity,
+        q=q,
         page=page,
         size=size,
     )

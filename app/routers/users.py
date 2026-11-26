@@ -9,11 +9,15 @@ Bulk creation provisions many accounts at once with the bootstrap password and
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlmodel import func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
+from app.core.rate_limit import login_limiter
 from app.core.security import DEFAULT_PASSWORD, hash_password
+from app.models.enrollment import Enrollment
 from app.models.enums import Role
+from app.models.school_class import SchoolClass
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.user import (
@@ -130,6 +134,7 @@ def list_users(
     session: SessionDep,
     role: Role | None = None,
     tenant_id: int | None = None,
+    q: str | None = None,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ) -> UserListResponse:
@@ -142,6 +147,15 @@ def list_users(
         conditions.append(User.tenant_id == tenant_id)
     if role is not None:
         conditions.append(User.role == role)
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        conditions.append(
+            or_(
+                User.full_name.ilike(pattern),
+                User.email.ilike(pattern),
+                User.username.ilike(pattern),
+            )
+        )
 
     total = session.exec(select(func.count()).select_from(User).where(*conditions)).one()
     items = session.exec(
@@ -151,8 +165,28 @@ def list_users(
         .offset((page - 1) * size)
         .limit(size)
     ).all()
+
+    user_ids = [u.id for u in items if u.id is not None]
+    class_map: dict[int, list[str]] = {uid: [] for uid in user_ids}
+    if user_ids:
+        rows = session.exec(
+            select(Enrollment.siswa_id, SchoolClass.name)
+            .join(SchoolClass, SchoolClass.id == Enrollment.class_id)
+            .where(
+                Enrollment.siswa_id.in_(user_ids),
+                SchoolClass.archived.is_(False),
+            )
+            .order_by(SchoolClass.name)
+        ).all()
+        for sid, cname in rows:
+            class_map.setdefault(sid, []).append(cname)
+
+    user_reads = [
+        UserRead.model_validate(u).model_copy(update={"class_names": class_map.get(u.id, [])})
+        for u in items
+    ]
     return UserListResponse(
-        items=[UserRead.model_validate(u) for u in items],
+        items=user_reads,
         total=total,
         page=page,
         size=size,
@@ -166,11 +200,16 @@ def list_users(
     dependencies=[_admin_or_super],
 )
 def create_user(data: UserCreate, current_user: CurrentUser, session: SessionDep) -> User:
-    # Both admin and superadmin may only provision guru/siswa accounts.
-    if data.role not in (Role.guru, Role.siswa):
+    if current_user.role == Role.admin:
+        if data.role not in (Role.guru, Role.siswa):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Hanya akun guru atau siswa yang dapat dibuat di instansi",
+            )
+    elif data.role not in (Role.admin, Role.guru, Role.siswa):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Hanya akun guru atau siswa yang dapat dibuat di instansi",
+            detail="Hanya akun admin, guru, atau siswa yang dapat dibuat di instansi",
         )
 
     tenant_id = _resolve_target_tenant(session, current_user, data.tenant_id)
@@ -182,17 +221,25 @@ def create_user(data: UserCreate, current_user: CurrentUser, session: SessionDep
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Siswa wajib memiliki username (NIK/NISN)",
             )
+        email = data.email or f"{data.username}@siswa.pajaksim.local"
+        username = data.username
     else:
-        data.username = None
+        if not data.email:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Email wajib diisi untuk peran selain siswa",
+            )
+        email = data.email
+        username = None
 
     user = _create_account(
         session,
         tenant_id=tenant_id,
         role=data.role,
-        email=data.email,
+        email=email,
         full_name=data.full_name,
         password=data.password,
-        username=data.username,
+        username=username,
     )
     log_action(
         session,
@@ -222,7 +269,7 @@ def bulk_create_users(
     Each row is validated independently — duplicates report as failed rows
     while the rest still get created (the same partial-success semantics as
     the document bulk endpoints). Accounts without an explicit password start
-    with the shared bootstrap password and must change it at first login.
+    with the shared bootstrap password and must change it at login.
     """
     if data.role not in (Role.guru, Role.siswa):
         raise HTTPException(
@@ -231,6 +278,16 @@ def bulk_create_users(
         )
 
     tenant_id = _resolve_target_tenant(session, current_user, data.tenant_id)
+
+    target_class: SchoolClass | None = None
+    if data.class_id is not None and data.role == Role.siswa:
+        target_class = session.get(SchoolClass, data.class_id)
+        if target_class is None or target_class.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="class_id tidak valid untuk instansi ini",
+            )
+
     _enforce_quota(session, tenant_id, data.role, adding=len(data.accounts))
 
     results: list[UserBulkResultRow] = []
@@ -248,16 +305,24 @@ def bulk_create_users(
                 # with the username, never the email.
                 email = f"{username}@siswa.pajaksim.local"
 
+            pw = item.password or data.default_password or DEFAULT_PASSWORD
+            must_change = (
+                data.must_change_password
+                if data.must_change_password is not None
+                else (item.password is None)
+            )
             user = _create_account(
                 session,
                 tenant_id=tenant_id,
                 role=data.role,
                 email=email,
                 full_name=item.full_name,
-                password=item.password or DEFAULT_PASSWORD,
+                password=pw,
                 username=username,
-                must_change_password=item.password is None,
+                must_change_password=must_change,
             )
+            if target_class is not None:
+                session.add(Enrollment(class_id=target_class.id, siswa_id=user.id))
             created += 1
             results.append(
                 UserBulkResultRow(
@@ -274,6 +339,9 @@ def bulk_create_users(
                 )
             )
 
+    summary = f"Bulk create {created} akun {data.role.value} ({len(results) - created} gagal)"
+    if target_class is not None:
+        summary += f" ke kelas {target_class.name}"
     log_action(
         session,
         actor=current_user,
@@ -281,7 +349,7 @@ def bulk_create_users(
         entity="user",
         entity_id=None,
         tenant_id=tenant_id,
-        summary=f"Bulk create {created} akun {data.role.value} ({len(results) - created} gagal)",
+        summary=summary,
     )
     session.commit()
     return UserBulkResult(created=created, failed=len(results) - created, results=results)
@@ -308,16 +376,51 @@ def update_user(
         )
 
     payload = data.model_dump(exclude_unset=True)
-    resetting_password = "password" in payload
+    if "email" in payload:
+        raw_email = payload["email"]
+        if not raw_email:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Email tidak boleh kosong",
+            )
+        normalized_email = raw_email.lower()
+        if normalized_email != user.email:
+            _ensure_email_free(session, normalized_email, exclude_id=user.id)
+        payload["email"] = normalized_email
+
+    if "username" in payload:
+        if user.role != Role.siswa:
+            payload.pop("username")
+        else:
+            new_username = payload["username"]
+            if not new_username:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Siswa wajib memiliki username (NIK/NISN)",
+                )
+            if new_username != user.username:
+                _ensure_username_free(session, new_username, exclude_id=user.id)
+
+    resetting_password = payload.get("password") is not None
+    if "password" in payload:
+        raw_pw = payload.pop("password")
+        if raw_pw is not None:
+            user.password_hash = hash_password(raw_pw)
     deactivating = payload.get("is_active") is False
-    if resetting_password:
-        user.password_hash = hash_password(payload.pop("password"))
-        # A forced reset (forgot password) also re-arms the first-login gate
-        # only when the account has never chosen its own password — otherwise
-        # keep the flag untouched.
+
+    old_email = user.email
+    old_username = user.username
     for field, value in payload.items():
         setattr(user, field, value)
     session.add(user)
+
+    if resetting_password:
+        login_limiter.reset_identifier(old_email)
+        login_limiter.reset_identifier(user.email)
+        if old_username:
+            login_limiter.reset_identifier(old_username)
+        if user.username:
+            login_limiter.reset_identifier(user.username)
 
     action = "user.password_reset" if resetting_password else (
         "user.deactivate" if deactivating else "user.update"

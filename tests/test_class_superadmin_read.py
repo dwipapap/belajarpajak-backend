@@ -1,4 +1,4 @@
-"""Regression: superadmin read-only cross-tenant access to classes."""
+"""Regression: superadmin cross-tenant class access and non-admin write guard."""
 
 from fastapi.testclient import TestClient
 
@@ -7,6 +7,7 @@ from tests.conftest import auth_headers
 BASE = "/api/v1"
 SUPERADMIN = "super@pajaksim.local"
 ADMIN = "admin@smkn1-pku.local"
+GURU = "guru1@smkn1-pku.local"
 
 
 def test_superadmin_can_list_classes_cross_tenant(client: TestClient):
@@ -19,9 +20,10 @@ def test_superadmin_can_list_classes_cross_tenant(client: TestClient):
     assert len(tenant_ids) >= 1
 
 
-def test_superadmin_can_read_class_detail_but_cannot_write(client: TestClient):
+def test_superadmin_can_read_class_detail_and_guru_cannot_write(client: TestClient):
     super_headers = auth_headers(client, SUPERADMIN)
     admin_headers = auth_headers(client, ADMIN)
+    guru_headers = auth_headers(client, GURU)
 
     classes = client.get(f"{BASE}/classes", headers=admin_headers).json()
     assert classes
@@ -30,24 +32,24 @@ def test_superadmin_can_read_class_detail_but_cannot_write(client: TestClient):
     detail = client.get(f"{BASE}/classes/{class_id}", headers=super_headers)
     assert detail.status_code == 200, detail.text
 
-    # Write stays admin-only.
+    # Write stays restricted to admin/superadmin (guru cannot write).
     denied_create = client.post(
         f"{BASE}/classes",
         json={"name": "X", "academic_year": "2026/2027", "guru_id": classes[0]["guru_id"]},
-        headers=super_headers,
+        headers=guru_headers,
     )
     assert denied_create.status_code == 403
 
     denied_enroll = client.post(
         f"{BASE}/classes/{class_id}/enrollments",
         json={"siswa_id": 1},
-        headers=super_headers,
+        headers=guru_headers,
     )
     assert denied_enroll.status_code == 403
 
     denied_archive = client.patch(
         f"{BASE}/classes/{class_id}/archive",
         json={"archived": True},
-        headers=super_headers,
+        headers=guru_headers,
     )
     assert denied_archive.status_code == 403

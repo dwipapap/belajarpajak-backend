@@ -16,11 +16,15 @@ from sqlmodel import func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.security import hash_password
+from app.models.assignment import Assignment, AssignmentSubmission
+from app.models.billing import BillingCode
 from app.models.enrollment import Enrollment
 from app.models.enums import Role
 from app.models.school_class import SchoolClass
+from app.models.slip import WithholdingSlip
 from app.models.tax_input_invoice import TaxInputInvoice
 from app.models.tax_invoice import TaxInvoice
+from app.models.tax_return import TaxReturn
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.tenant import (
@@ -364,6 +368,18 @@ def export_tenant(tenant_id: int, session: SessionDep) -> Response:
             select(TaxInvoice).where(TaxInvoice.tenant_id == tenant_id)).all()],
         "tax_input_invoices": [loads(i.model_dump_json()) for i in session.exec(
             select(TaxInputInvoice).where(TaxInputInvoice.tenant_id == tenant_id)).all()],
+        "withholding_slips": [loads(w.model_dump_json()) for w in session.exec(
+            select(WithholdingSlip).where(WithholdingSlip.tenant_id == tenant_id)).all()],
+        "tax_returns": [loads(r.model_dump_json()) for r in session.exec(
+            select(TaxReturn).where(TaxReturn.tenant_id == tenant_id)).all()],
+        "billing_codes": [loads(b.model_dump_json()) for b in session.exec(
+            select(BillingCode).where(BillingCode.tenant_id == tenant_id)).all()],
+        "assignments": [loads(a.model_dump_json()) for a in session.exec(
+            select(Assignment).where(Assignment.tenant_id == tenant_id)).all()],
+        "assignment_submissions": [loads(s.model_dump_json()) for s in session.exec(
+            select(AssignmentSubmission)
+            .join(Assignment, Assignment.id == AssignmentSubmission.assignment_id)
+            .where(Assignment.tenant_id == tenant_id)).all()],
     }
     content = dumps(backup, ensure_ascii=False, indent=2, default=str)
     return Response(

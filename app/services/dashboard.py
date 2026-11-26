@@ -945,6 +945,29 @@ def build_tenant_overviews(session: Session, tenants: list[Tenant]) -> list[Tena
         if not archived:
             active[tid] = active.get(tid, 0) + n
 
+    active_enrollment_exists = (
+        select(Enrollment.id)
+        .join(SchoolClass, SchoolClass.id == Enrollment.class_id)
+        .where(
+            Enrollment.siswa_id == User.id,
+            SchoolClass.tenant_id == User.tenant_id,
+            SchoolClass.archived.is_(False),
+        )
+        .exists()
+    )
+    unenrolled: dict[int, int] = dict(
+        session.exec(
+            select(User.tenant_id, func.count())
+            .where(
+                User.tenant_id.in_(ids),
+                User.role == Role.siswa,
+                User.is_active.is_(True),
+                ~active_enrollment_exists,
+            )
+            .group_by(User.tenant_id)
+        ).all()
+    )
+
     def usage(used: int, limit: int | None) -> QuotaUsage:
         # 0 / NULL = unlimited, same convention as the quota enforcement.
         lim = limit or None
@@ -970,6 +993,7 @@ def build_tenant_overviews(session: Session, tenants: list[Tenant]) -> list[Tena
                 siswa=usage(users.get((t.id, "siswa"), 0), t.max_siswa),
                 kelas=usage(kelas.get(t.id, 0), t.max_kelas),
                 active_classes=active.get(t.id, 0),
+                unenrolled_siswa=int(unenrolled.get(t.id, 0)),
             )
         )
     return out

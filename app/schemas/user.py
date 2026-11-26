@@ -13,7 +13,7 @@ _EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 class UserCreate(BaseModel):
-    email: str = Field(pattern=_EMAIL_PATTERN, max_length=255)
+    email: str | None = Field(default=None, pattern=_EMAIL_PATTERN, max_length=255)
     password: str = Field(min_length=8)
     full_name: str
     role: Role
@@ -41,6 +41,9 @@ class UserBulkCreate(BaseModel):
     accounts: list[UserBulkItem] = Field(max_length=200)
     #: Only meaningful for superadmin; admin is forced to their own tenant.
     tenant_id: int | None = None
+    class_id: int | None = None
+    default_password: str | None = Field(default=None, min_length=8, max_length=100)
+    must_change_password: bool | None = None
 
 
 class UserBulkResultRow(BaseModel):
@@ -60,6 +63,8 @@ class UserBulkResult(BaseModel):
 
 class UserUpdate(BaseModel):
     full_name: str | None = None
+    email: str | None = Field(default=None, pattern=_EMAIL_PATTERN, max_length=255)
+    username: str | None = Field(default=None, max_length=32, pattern=r"^[a-zA-Z0-9]+$")
     password: str | None = Field(default=None, min_length=8)
     is_active: bool | None = None
 
@@ -73,6 +78,7 @@ class UserRead(BaseModel):
     tenant_id: int | None
     is_active: bool
     must_change_password: bool
+    class_names: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
