@@ -30,6 +30,7 @@ from app.models.tax_invoice import TaxInvoice
 from app.models.tax_return import TaxReturn
 from app.models.user import User
 from app.schemas.assignment import (
+    ApproveAutoScoresResult,
     AssignmentCreate,
     AssignmentDetailRead,
     AssignmentRead,
@@ -1147,6 +1148,53 @@ def grade_submission(
     session.commit()
     session.refresh(submission)
     return _build_submission_read(session, assignment, siswa, submission)
+
+
+@router.post(
+    "/{assignment_id}/approve-auto-scores",
+    response_model=ApproveAutoScoresResult,
+    dependencies=[_guru_only],
+)
+def approve_auto_scores(
+    assignment_id: int,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ApproveAutoScoresResult:
+    assignment = _require_guru_owned_assignment(session, current_user, assignment_id)
+    subs = session.exec(
+        select(AssignmentSubmission).where(
+            AssignmentSubmission.assignment_id == assignment.id,
+            AssignmentSubmission.final_score.is_(None),
+            AssignmentSubmission.auto_score.is_not(None),
+        )
+    ).all()
+
+    now = datetime.now(UTC)
+    approved = 0
+    for sub in subs:
+        sub.final_score = sub.auto_score
+        sub.graded_by = current_user.id
+        sub.graded_at = now
+        sub.updated_at = now
+        session.add(sub)
+
+        doc = _resolve_document(session, assignment.doc_type, sub.doc_id)
+        if doc is not None:
+            doc.score = sub.auto_score
+            session.add(doc)
+        approved += 1
+
+    log_action(
+        session,
+        actor=current_user,
+        action="tugas.bulk_grade",
+        entity="assignment",
+        entity_id=assignment.id,
+        tenant_id=assignment.tenant_id,
+        summary=f"Mengesahkan nilai otomatis {approved} pengumpulan pada tugas {assignment.title}",
+    )
+    session.commit()
+    return ApproveAutoScoresResult(approved=approved)
 
 
 # ---------------------------------------------------------------------------

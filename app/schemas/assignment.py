@@ -43,6 +43,10 @@ class SubmissionGradeRequest(BaseModel):
     teacher_feedback: str | None = Field(default=None, max_length=500)
 
 
+class ApproveAutoScoresResult(BaseModel):
+    approved: int
+
+
 class CandidateDocRead(BaseModel):
     """A student's own document of matching doc_type available to submit."""
 

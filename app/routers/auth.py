@@ -6,7 +6,7 @@ from datetime import date
 
 import jwt
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlmodel import select
+from sqlmodel import func, select
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, SessionDep
@@ -59,7 +59,7 @@ def _resolve_login_user(session: SessionDep, data: LoginRequest) -> User:
     """Resolve the login handle.
 
     Email and username are both globally unique, so one identifier is enough —
-    no school code. Emails are matched case-insensitively; usernames exactly.
+    no school code. Both emails and usernames are matched case-insensitively.
     """
     identifier = data.identifier.strip()
     by_email = session.exec(
@@ -67,7 +67,9 @@ def _resolve_login_user(session: SessionDep, data: LoginRequest) -> User:
     ).first()
     user = by_email
     if user is None:
-        user = session.exec(select(User).where(User.username == identifier)).first()
+        user = session.exec(
+            select(User).where(func.lower(User.username) == identifier.lower())
+        ).first()
     if user is None:
         raise _INVALID_CREDENTIALS
     return user

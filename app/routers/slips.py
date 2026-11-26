@@ -21,6 +21,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from pydantic import ValidationError
+from sqlalchemy import or_
 from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
@@ -471,16 +472,21 @@ DIRECT_DPP_TYPES = (SlipType.sp, SlipType.cy, SlipType.bppu)
 FULL_DPP_BASIS_POINTS = 10_000
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def slip_party_name(slip: WithholdingSlip) -> str:
     """Counterparty name, or the depositor for SP/CY (which have none)."""
     return slip.recipient_name or slip.withholder_name or "Penyetor"
 
 
-def slip_to_read(slip: WithholdingSlip) -> SlipRead:
+def slip_to_read(slip: WithholdingSlip, siswa_name: str | None = None) -> SlipRead:
     """Map a slip row to its read schema; percent fields come from basis points."""
     return SlipRead.model_validate(
         {
             **slip.model_dump(),
+            "siswa_name": siswa_name,
             "dpp_percent": basis_points_to_percent(slip.dpp_rate_basis_points),
             "rate_percent": basis_points_to_percent(slip.rate_basis_points),
         }
@@ -694,6 +700,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         tax_year: Annotated[int | None, Query(ge=2020, le=2100)] = None,
         tax_month: Annotated[int | None, Query(ge=1, le=12)] = None,
         tax_facility: SlipTaxFacility | None = None,
+        q: str | None = None,
         page: Annotated[int, Query(ge=1)] = 1,
         size: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> SlipListResponse:
@@ -708,6 +715,22 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             conditions.append(WithholdingSlip.siswa_id == siswa_id)
         if tax_facility is not None:
             conditions.append(WithholdingSlip.tax_facility == tax_facility)
+        if q and q.strip():
+            pattern = f"%{_escape_like(q.strip())}%"
+            siswa_matches = select(User.id).where(
+                or_(
+                    User.full_name.ilike(pattern, escape="\\"),
+                    User.username.ilike(pattern, escape="\\"),
+                )
+            )
+            conditions.append(
+                or_(
+                    WithholdingSlip.recipient_name.ilike(pattern, escape="\\"),
+                    WithholdingSlip.withholding_number.ilike(pattern, escape="\\"),
+                    WithholdingSlip.tax_object_code.ilike(pattern, escape="\\"),
+                    WithholdingSlip.siswa_id.in_(siswa_matches),
+                )
+            )
 
         base_count = apply_access_filters(
             select(func.count()).select_from(WithholdingSlip).where(*conditions),
@@ -723,8 +746,21 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         )
         total = session.exec(base_count).one()
         items = session.exec(base_items).all()
+        siswa_ids = {item.siswa_id for item in items if item.siswa_id is not None}
+        siswa_names = (
+            dict(
+                session.exec(
+                    select(User.id, User.full_name).where(User.id.in_(siswa_ids))
+                ).all()
+            )
+            if siswa_ids
+            else {}
+        )
         return SlipListResponse(
-            items=[slip_to_read(item) for item in items],
+            items=[
+                slip_to_read(item, siswa_name=siswa_names.get(item.siswa_id))
+                for item in items
+            ],
             total=total,
             page=page,
             size=size,

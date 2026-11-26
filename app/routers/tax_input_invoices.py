@@ -14,6 +14,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
@@ -250,10 +251,13 @@ def line_to_read(line: TaxInputLine) -> TaxInputLineRead:
     )
 
 
-def invoice_to_read(session: Session, invoice: TaxInputInvoice) -> TaxInputRead:
+def invoice_to_read(
+    session: Session, invoice: TaxInputInvoice, siswa_name: str | None = None
+) -> TaxInputRead:
     return TaxInputRead.model_validate(
         {
             **invoice.model_dump(),
+            "siswa_name": siswa_name,
             "status_faktur": masukan_status_faktur(invoice),
             "lines": [line_to_read(line) for line in _input_lines(session, invoice.id)],
         }
@@ -379,6 +383,7 @@ def _input_conditions(
     buyer_name: str | None = None,
     invoice_number: str | None = None,
     origin: TaxInputOrigin | None = None,
+    q: str | None = None,
     current_user: User,
 ) -> list:
     conditions = []
@@ -402,6 +407,22 @@ def _input_conditions(
         conditions.append(TaxInputInvoice.buyer_name.ilike(f"%{_escape_like(buyer_name)}%", escape="\\"))
     if invoice_number:
         conditions.append(TaxInputInvoice.invoice_number.ilike(f"%{_escape_like(invoice_number)}%", escape="\\"))
+    if q and q.strip():
+        pattern = f"%{_escape_like(q.strip())}%"
+        siswa_matches = select(User.id).where(
+            or_(
+                User.full_name.ilike(pattern, escape="\\"),
+                User.username.ilike(pattern, escape="\\"),
+            )
+        )
+        conditions.append(
+            or_(
+                TaxInputInvoice.seller_name.ilike(pattern, escape="\\"),
+                TaxInputInvoice.invoice_number.ilike(pattern, escape="\\"),
+                TaxInputInvoice.reference.ilike(pattern, escape="\\"),
+                TaxInputInvoice.siswa_id.in_(siswa_matches),
+            )
+        )
     if current_user.role == Role.superadmin and tenant_id is not None:
         conditions.append(TaxInputInvoice.tenant_id == tenant_id)
     if class_id is not None:
@@ -431,6 +452,7 @@ def list_input_invoices(
     buyer_name: str | None = None,
     invoice_number: str | None = None,
     origin: TaxInputOrigin | None = None,
+    q: str | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> TaxInputListResponse:
@@ -448,6 +470,7 @@ def list_input_invoices(
         buyer_name=buyer_name,
         invoice_number=invoice_number,
         origin=origin,
+        q=q,
         current_user=current_user,
     )
 
@@ -466,8 +489,21 @@ def list_input_invoices(
             current_user,
         )
     ).all()
+    siswa_ids = {item.siswa_id for item in items if item.siswa_id is not None}
+    siswa_names = (
+        dict(
+            session.exec(
+                select(User.id, User.full_name).where(User.id.in_(siswa_ids))
+            ).all()
+        )
+        if siswa_ids
+        else {}
+    )
     return TaxInputListResponse(
-        items=[invoice_to_read(session, item) for item in items],
+        items=[
+            invoice_to_read(session, item, siswa_name=siswa_names.get(item.siswa_id))
+            for item in items
+        ],
         total=total,
         page=page,
         size=size,

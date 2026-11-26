@@ -185,6 +185,7 @@ class TaxInvoiceRead(BaseModel):
     tenant_id: int
     class_id: int | None
     siswa_id: int
+    siswa_name: str | None = None
     created_by_id: int
 
     status: TaxInvoiceStatus
