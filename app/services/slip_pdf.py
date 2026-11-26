@@ -59,6 +59,8 @@ _P21_TITLE = {
 _FACILITY = {
     SlipTaxFacility.none: "Tanpa Fasilitas",
     SlipTaxFacility.dtp: "PPh Ditanggung Pemerintah (DTP)",
+    SlipTaxFacility.treaty: "Surat Keterangan Domisili (SKD)",
+    SlipTaxFacility.lainnya: "Fasilitas Lainnya",
     SlipTaxFacility.skb: "Surat Keterangan Bebas (SKB)",
     SlipTaxFacility.rate_0: "Tarif 0%",
 }

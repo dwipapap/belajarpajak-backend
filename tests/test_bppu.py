@@ -158,12 +158,18 @@ def test_bppu_bulk_issue_partial(client: TestClient) -> None:
     bulk = client.post(
         f"{BASE}/bppu/bulk-issue",
         headers=headers,
-        json={"kode_otorisasi": "KO-SIM-123", "ids": [first["id"], second["id"], 99_999_999]},
+        json={
+            "signer_name": "Penandatangan Massal",
+            "kode_otorisasi": "KO-SIM-123",
+            "ids": [first["id"], second["id"], 99_999_999],
+        },
     )
     assert bulk.status_code == 200
     body = bulk.json()
     assert body["issued"] == 2
     assert body["failed"] == 1
+    fetched = client.get(f"{BASE}/bppu/{first['id']}", headers=headers).json()
+    assert fetched["signer_name"] == "Penandatangan Massal"
 
 
 def test_bppu_types_are_isolated_despite_shared_table(client: TestClient) -> None:

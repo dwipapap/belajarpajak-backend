@@ -973,6 +973,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     ) -> SlipBulkIssueResult:
         """Bulk Process → Diterbitkan Masa Pajak: issue many drafts at once."""
         require_kode_otorisasi(data.kode_otorisasi)
+        signer_name = (data.signer_name or "").strip() or current_user.full_name
         results: list[SlipImportRowResult] = []
         for slip_id in data.ids:
             slip = session.get(WithholdingSlip, slip_id)
@@ -996,7 +997,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
                 slip,
                 label,
                 signer_id=current_user.id,
-                signer_name=current_user.full_name,
+                signer_name=signer_name,
             )
             session.add(slip)
             session.commit()

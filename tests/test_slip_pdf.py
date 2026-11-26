@@ -99,3 +99,21 @@ def test_render_handles_missing_data(tmp_path) -> None:
     text = _text(pdf, tmp_path)
     if text is not None:
         assert "DIBATALKAN" in text
+
+
+@pytest.mark.parametrize(
+    ("facility", "expected_label"),
+    [
+        (SlipTaxFacility.lainnya, "Fasilitas Lainnya"),
+        (SlipTaxFacility.treaty, "Surat Keterangan Domisili (SKD)"),
+    ],
+)
+def test_render_facility_labels(
+    facility: SlipTaxFacility, expected_label: str, tmp_path
+) -> None:
+    pdf = render_slip_pdf(_slip(SlipType.bppu, tax_facility=facility), "BPPU")
+    assert pdf.startswith(b"%PDF")
+    text = _text(pdf, tmp_path)
+    if text is None:
+        pytest.skip("pdftotext unavailable")
+    assert expected_label in text

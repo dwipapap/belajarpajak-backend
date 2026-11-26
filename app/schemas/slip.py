@@ -178,6 +178,7 @@ class SlipSptFlagUpdate(BaseModel):
 
 class SlipBulkIssue(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=200)
+    signer_name: str | None = Field(default=None, max_length=150)
     kode_otorisasi: str | None = Field(default=None, max_length=100)
 
 
