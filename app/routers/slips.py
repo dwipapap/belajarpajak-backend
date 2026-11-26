@@ -26,7 +26,8 @@ from sqlmodel import Session, func, select
 
 from app.core.deps import CurrentUser, SessionDep, require_roles
 from app.core.money import apply_basis_points, basis_points_to_percent, percent_to_basis_points
-from app.core.scope import resolve_document_scope
+from app.core.scope import is_enrolled, resolve_document_scope
+from app.models.enrollment import Enrollment
 from app.models.enums import (
     Role,
     SlipSptFlag,
@@ -211,15 +212,6 @@ def _validate_learning_fields(
         if tax_month == 12:
             _fail("TER hanya untuk Jan–Nov; Desember wajib progresif.")
 
-    if (
-        slip_type == SlipType.bp21
-        and tax_nature == SlipTaxNature.non_final
-        and tax_month is not None
-        and 1 <= tax_month <= 11
-        and (ter_category is None or str(ter_category).strip() == "")
-    ):
-        _fail("Pilih kategori TER (A/B/C) untuk Masa Jan–Nov.")
-
     return catalog_object
 
 
@@ -384,47 +376,38 @@ def _resolve_income_tax(
     ter_category: str | None = None,
     tax_month: int | None = None,
     tax_object_code: str | None = None,
+    manual_income_tax: int | None = None,
 ) -> tuple[int, str]:
     if tax_facility in (SlipTaxFacility.skb, SlipTaxFacility.rate_0):
         return 0, "nol_skb"
 
-    if (
-        slip_type == SlipType.bp21
-        and tax_nature == SlipTaxNature.non_final
-        and ter_category
-        and str(ter_category).strip().upper() in TER_CATEGORIES
-        and tax_month is not None
-        and 1 <= tax_month <= 11
-    ):
-        # Priority: official TER table (ter.py, seeded to Rp32,5jt) first;
-        # SIM_TER_RATES below is kept for compatibility and used only when
-        # the official table misses (unknown category/gross).
-        cat = str(ter_category).strip().upper()
-        official_rate = ter_service.lookup_rate(cat, gross_income)
-        if official_rate is not None:
-            return ter_service.monthly_tax(gross_income, official_rate), "ter"
-        ter_tax = _calculate_ter_tax(gross_income, cat)
-        if ter_tax is not None:
-            return ter_tax, "ter"
-
     if slip_type == SlipType.bpmp:
-        # Monthly employee slip: TER rate x gross (PMK 168/2023 Art. 4).
-        # Official table (ter.py) is the primary source while seeded;
-        # miss (unknown PTKP/gross) falls back to the explicit rate_percent.
+        if manual_income_tax is not None:
+            return manual_income_tax, "manual"
+        # Official PP 58/2023 & PMK 168/2023 TER fallback when manual income_tax is omitted.
         category = ter_service.ter_category_for_ptkp(ptkp_status)
         if category is not None:
             ter_rate = ter_service.lookup_rate(category, gross_income)
             if ter_rate is not None:
                 return ter_service.monthly_tax(gross_income, ter_rate), "ter"
-    if slip_type == SlipType.bp21 and tax_nature == SlipTaxNature.non_final:
-        progressive_tax = _calculate_bp21_progressive_tax(
-            session,
-            gross_income=gross_income,
-            ptkp_status=ptkp_status,
-            tax_year=tax_year,
-        )
-        if progressive_tax is not None:
-            return progressive_tax, "progresif"
+        return calculate_income_tax(dpp, rate_basis_points, tax_facility), "manual"
+
+    if slip_type == SlipType.bp21:
+        if (
+            tax_nature == SlipTaxNature.non_final
+            and ter_category
+            and str(ter_category).strip().upper() in TER_CATEGORIES
+            and tax_month is not None
+            and 1 <= tax_month <= 11
+        ):
+            cat = str(ter_category).strip().upper()
+            official_rate = ter_service.lookup_rate(cat, gross_income)
+            if official_rate is not None:
+                return ter_service.monthly_tax(gross_income, official_rate), "ter"
+            ter_tax = _calculate_ter_tax(gross_income, cat)
+            if ter_tax is not None:
+                return ter_tax, "ter"
+        return calculate_income_tax(dpp, rate_basis_points, tax_facility), "manual"
 
     if (
         slip_type in (SlipType.bp26, SlipType.bpnr)
@@ -512,16 +495,32 @@ def issue_slip(
         slip.signer_name = signer_name
 
 
-def can_read_slip(session: Session, current_user: User, slip: WithholdingSlip) -> bool:
+def can_read_slip(
+    session: Session, current_user: User, slip: WithholdingSlip, *, for_write: bool = False
+) -> bool:
     if current_user.role == Role.superadmin:
-        return True
+        return not for_write
     if current_user.role == Role.admin:
         return slip.tenant_id == current_user.tenant_id
     if current_user.role == Role.siswa:
-        return slip.siswa_id == current_user.id
-    if current_user.role == Role.guru and slip.class_id is not None:
-        school_class = session.get(SchoolClass, slip.class_id)
-        return school_class is not None and school_class.guru_id == current_user.id
+        if slip.siswa_id == current_user.id:
+            return True
+        if (
+            not for_write
+            and slip.status == SlipStatus.issued
+            and slip.class_id is not None
+            and slip.siswa_id == slip.created_by_id
+            and is_enrolled(session, class_id=slip.class_id, siswa_id=current_user.id)
+        ):
+            owner = session.get(User, slip.siswa_id)
+            return owner is not None and owner.role == Role.guru
+        return False
+    if current_user.role == Role.guru:
+        if slip.siswa_id == current_user.id:
+            return True
+        if slip.class_id is not None:
+            school_class = session.get(SchoolClass, slip.class_id)
+            return school_class is not None and school_class.guru_id == current_user.id
     return False
 
 
@@ -534,7 +533,12 @@ def apply_access_filters(query, current_user: User):
         return query.where(WithholdingSlip.siswa_id == current_user.id)
 
     taught_class_ids = select(SchoolClass.id).where(SchoolClass.guru_id == current_user.id)
-    return query.where(WithholdingSlip.class_id.in_(taught_class_ids))
+    return query.where(
+        or_(
+            WithholdingSlip.class_id.in_(taught_class_ids),
+            WithholdingSlip.siswa_id == current_user.id,
+        )
+    )
 
 
 # --- router factory -----------------------------------------------------------
@@ -556,13 +560,17 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     _invalidate_roles = Depends(require_roles(Role.admin, Role.guru, Role.siswa))
 
     def _get_accessible_slip(
-        slip_id: int, current_user: CurrentUser, session: SessionDep
+        slip_id: int,
+        current_user: CurrentUser,
+        session: SessionDep,
+        *,
+        for_write: bool = False,
     ) -> WithholdingSlip:
         slip = session.get(WithholdingSlip, slip_id)
         if (
             slip is None
             or slip.slip_type != slip_type
-            or not can_read_slip(session, current_user, slip)
+            or not can_read_slip(session, current_user, slip, for_write=for_write)
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"{label} tidak ditemukan"
@@ -619,6 +627,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             class_id=data.class_id,
             siswa_id=data.siswa_id,
             label=label,
+            allow_guru_self=slip_type in (SlipType.bp21, SlipType.bpmp),
         )
         rate_basis_points = percent_to_basis_points(data.rate_percent)
         if direct_dpp:
@@ -645,8 +654,11 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             ter_category=data.ter_category,
             tax_month=data.tax_month,
             tax_object_code=data.tax_object_code,
+            manual_income_tax=data.income_tax,
         )
-        payload = data.model_dump(exclude={"class_id", "siswa_id", "dpp_percent", "rate_percent", "dpp"})
+        payload = data.model_dump(
+            exclude={"class_id", "siswa_id", "dpp_percent", "rate_percent", "dpp", "income_tax"}
+        )
         if catalog_object is not None:
             payload["tax_object_name"] = catalog_object["nama"][:150]
             payload["kap_kjs"] = catalog_object["kap_kjs"]
@@ -701,6 +713,8 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         tax_month: Annotated[int | None, Query(ge=1, le=12)] = None,
         tax_facility: SlipTaxFacility | None = None,
         q: str | None = None,
+        mine_only: bool = False,
+        exclude_guru: bool = False,
         page: Annotated[int, Query(ge=1)] = 1,
         size: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> SlipListResponse:
@@ -713,6 +727,11 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             conditions.append(WithholdingSlip.class_id == class_id)
         if siswa_id is not None and current_user.role != Role.siswa:
             conditions.append(WithholdingSlip.siswa_id == siswa_id)
+        if mine_only:
+            conditions.append(WithholdingSlip.siswa_id == current_user.id)
+        elif exclude_guru:
+            guru_ids = select(User.id).where(User.role == Role.guru)
+            conditions.append(WithholdingSlip.siswa_id.not_in(guru_ids))
         if tax_facility is not None:
             conditions.append(WithholdingSlip.tax_facility == tax_facility)
         if q and q.strip():
@@ -765,6 +784,53 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             page=page,
             size=size,
         )
+
+    @router.get("/guru-examples", response_model=list[SlipRead], dependencies=[_roles])
+    def list_guru_examples(
+        current_user: CurrentUser,
+        session: SessionDep,
+        class_id: int | None = None,
+    ) -> list[SlipRead]:
+        """Issued teacher-authored example slips shared with classes."""
+        guru_ids = select(User.id).where(User.role == Role.guru)
+        conditions = [
+            WithholdingSlip.slip_type == slip_type,
+            WithholdingSlip.status == SlipStatus.issued,
+            WithholdingSlip.siswa_id == WithholdingSlip.created_by_id,
+            WithholdingSlip.siswa_id.in_(guru_ids),
+            WithholdingSlip.class_id.is_not(None),
+        ]
+        if class_id is not None:
+            conditions.append(WithholdingSlip.class_id == class_id)
+        if current_user.role == Role.siswa:
+            enrolled_ids = select(Enrollment.class_id).where(
+                Enrollment.siswa_id == current_user.id
+            )
+            conditions.append(WithholdingSlip.class_id.in_(enrolled_ids))
+        elif current_user.role == Role.guru:
+            conditions.append(WithholdingSlip.siswa_id == current_user.id)
+        elif current_user.role == Role.admin:
+            conditions.append(WithholdingSlip.tenant_id == current_user.tenant_id)
+        items = session.exec(
+            select(WithholdingSlip)
+            .where(*conditions)
+            .order_by(WithholdingSlip.id.desc())
+            .limit(100)
+        ).all()
+        author_ids = {item.siswa_id for item in items}
+        author_names = (
+            dict(
+                session.exec(
+                    select(User.id, User.full_name).where(User.id.in_(author_ids))
+                ).all()
+            )
+            if author_ids
+            else {}
+        )
+        return [
+            slip_to_read(item, siswa_name=author_names.get(item.siswa_id))
+            for item in items
+        ]
 
     @router.get("/summary", response_model=SlipSummary, dependencies=[_roles])
     def slip_summary(current_user: CurrentUser, session: SessionDep) -> SlipSummary:
@@ -1016,7 +1082,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             if (
                 slip is None
                 or slip.slip_type != slip_type
-                or not can_read_slip(session, current_user, slip)
+                or not can_read_slip(session, current_user, slip, for_write=True)
             ):
                 results.append(
                     SlipImportRowResult(
@@ -1051,7 +1117,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     def update_slip(
         slip_id: int, data: SlipUpdate, current_user: CurrentUser, session: SessionDep
     ) -> SlipRead:
-        slip = _get_accessible_slip(slip_id, current_user, session)
+        slip = _get_accessible_slip(slip_id, current_user, session, for_write=True)
         if slip.status != SlipStatus.draft:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1059,6 +1125,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             )
 
         payload = data.model_dump(exclude_unset=True)
+        manual_income_tax = payload.pop("income_tax", None)
         if slip_type in DIRECT_DPP_TYPES and payload.get("dpp") is not None:
             slip.gross_income = payload.pop("dpp")
             slip.dpp_rate_basis_points = FULL_DPP_BASIS_POINTS
@@ -1082,6 +1149,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             class_id=class_id,
             siswa_id=siswa_id,
             label=label,
+            allow_guru_self=slip_type in (SlipType.bp21, SlipType.bpmp),
         )
         slip.tenant_id = tenant_id
         slip.class_id = resolved_class_id
@@ -1137,6 +1205,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
             ter_category=slip.ter_category,
             tax_month=slip.tax_month,
             tax_object_code=slip.tax_object_code,
+            manual_income_tax=manual_income_tax,
         )
         slip.income_tax = income_tax
         slip.calculation_method = calculation_method
@@ -1150,7 +1219,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     )
     def delete_slip(slip_id: int, current_user: CurrentUser, session: SessionDep) -> None:
         """Hapus — only drafts (Belum Terbit) can be deleted."""
-        slip = _get_accessible_slip(slip_id, current_user, session)
+        slip = _get_accessible_slip(slip_id, current_user, session, for_write=True)
         if slip.status != SlipStatus.draft:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1197,7 +1266,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         session: SessionDep,
         data: SlipIssue | None = None,
     ) -> SlipRead:
-        slip = _get_accessible_slip(slip_id, current_user, session)
+        slip = _get_accessible_slip(slip_id, current_user, session, for_write=True)
         if slip.status != SlipStatus.draft:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=f"{label} bukan draft"
@@ -1230,7 +1299,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
         slip_id: int, data: SlipCancel, current_user: CurrentUser, session: SessionDep
     ) -> SlipRead:
         """Batal — an issued slip moves to Tidak Valid."""
-        slip = _get_accessible_slip(slip_id, current_user, session)
+        slip = _get_accessible_slip(slip_id, current_user, session, for_write=True)
         if slip.status != SlipStatus.issued:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1256,7 +1325,7 @@ def make_slip_router(slip_type: SlipType, label: str) -> APIRouter:
     def invalidate(
         slip_id: int, data: SlipInvalidate, current_user: CurrentUser, session: SessionDep
     ) -> SlipRead:
-        slip = _get_accessible_slip(slip_id, current_user, session)
+        slip = _get_accessible_slip(slip_id, current_user, session, for_write=True)
         slip.status = SlipStatus.invalid
         slip.invalid_reason = data.invalid_reason
         session.add(slip)

@@ -25,7 +25,6 @@ from app.models.enums import (
     BuyerIdentityType,
     SlipStatus,
     SlipTaxFacility,
-    SlipTaxNature,
     SlipType,
     TaxInputCreditStatus,
     TaxInvoiceStatus,
@@ -40,7 +39,6 @@ from app.routers.slips import (
     DIRECT_DPP_TYPES,
     FOREIGN_TIN_RE,
     NO_COUNTERPARTY_TYPES,
-    TER_CATEGORIES,
     _resolve_income_tax,
     calculate_dpp,
 )
@@ -245,31 +243,19 @@ def grade_withholding_slip(
                 f"KAP-KJS '{slip.kap_kjs}' tidak sesuai dengan katalog "
                 f"({catalog_obj['kap_kjs']})."
             )
-        elif stype == SlipType.bp21 and slip.tax_nature == SlipTaxNature.non_final:
-            if 1 <= slip.tax_month <= 11:
-                cat = (slip.ter_category or "").strip().upper()
-                rate_ok = cat in TER_CATEGORIES
-                rate_msg = (
-                    f"Kode objek {slip.tax_object_code} dengan kategori TER {cat} valid."
-                    if rate_ok
-                    else "BP21 tidak final Masa Jan–Nov wajib memilih kategori TER (A/B/C)."
-                )
-            else:
-                rate_ok = bool((slip.ptkp_status or "").strip())
-                rate_msg = (
-                    f"Kode objek {slip.tax_object_code} Masa Desember memakai PTKP "
-                    f"{slip.ptkp_status}."
-                    if rate_ok
-                    else "BP21 Masa Desember wajib mencantumkan status PTKP."
-                )
+        elif stype == SlipType.bp21:
+            rate_ok = rate_pct >= 0
+            rate_msg = (
+                f"Kode objek {slip.tax_object_code} dengan tarif manual {rate_pct:g}% valid."
+            )
         elif stype == SlipType.bpmp:
             cat = ter_service.ter_category_for_ptkp(slip.ptkp_status)
-            rate_ok = cat is not None
+            rate_ok = cat is not None and rate_pct >= 0
             rate_msg = (
                 f"Kode objek {slip.tax_object_code} dengan status PTKP "
-                f"{slip.ptkp_status} (TER {cat}) valid."
+                f"{slip.ptkp_status} (TER {cat}) dan tarif {rate_pct:g}% valid."
                 if rate_ok
-                else "BPMP wajib mencantumkan status PTKP yang valid untuk kategori TER."
+                else "BPMP wajib mencantumkan status PTKP yang valid."
             )
         elif facility_val in objek_service.NON_ENFORCED_FACILITIES:
             if slip.tax_facility == SlipTaxFacility.treaty and stype in (
@@ -349,6 +335,11 @@ def grade_withholding_slip(
         ter_category=slip.ter_category,
         tax_month=slip.tax_month,
         tax_object_code=slip.tax_object_code,
+        manual_income_tax=(
+            slip.income_tax
+            if stype == SlipType.bpmp and slip.calculation_method == "manual"
+            else None
+        ),
     )
     math_ok = (
         effective_gross > 0

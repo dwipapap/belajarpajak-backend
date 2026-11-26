@@ -37,10 +37,35 @@ def resolve_document_scope(
     class_id: int | None,
     siswa_id: int | None,
     label: str,
+    allow_guru_self: bool = False,
 ) -> tuple[int, int | None, int]:
     """Resolve and validate tenant/class/student scope for document writes."""
     if current_user.role == Role.siswa:
         siswa_id = current_user.id
+
+    if (
+        allow_guru_self
+        and current_user.role == Role.guru
+        and (siswa_id is None or siswa_id == current_user.id)
+    ):
+        tenant_id = current_user.tenant_id
+        if tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Guru wajib berada dalam tenant",
+            )
+        if class_id is not None:
+            school_class = session.get(SchoolClass, class_id)
+            if school_class is None or school_class.tenant_id != tenant_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Kelas tidak ditemukan",
+                )
+            if school_class.guru_id != current_user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="Bukan kelas Anda"
+                )
+        return tenant_id, class_id, current_user.id
 
     if siswa_id is None:
         raise HTTPException(

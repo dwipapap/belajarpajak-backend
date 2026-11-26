@@ -117,7 +117,7 @@ def test_auto_grade_bppu_valid_and_draft_and_wrong_math():
             "A",
             10_000,
             8_000_000,
-            100_000,  # Official TER A for 8jt = 1.25% -> 100,000
+            120_000,  # Official PMK 168/2023 TER A for 8jt = 1.50% -> 120,000
         ),
         (
             SlipType.bp26,
@@ -135,13 +135,13 @@ def test_auto_grade_bppu_valid_and_draft_and_wrong_math():
             SlipType.bpmp,
             "21-100-01",
             "411121-100",
-            125,
+            150,
             "3201234567890002",
             "TK/0",
             None,
             10_000,
             8_000_000,
-            100_000,
+            120_000,
         ),
         (
             SlipType.bpnr,

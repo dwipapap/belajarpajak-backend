@@ -65,8 +65,8 @@ def test_siswa_can_create_and_issue_bpmp_with_explicit_rate(client: TestClient) 
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["status"] == "draft"
-    # Official TER table hit: TK/0 → A, 10jt → 175bp → 175.000.
-    assert body["income_tax"] == 175_000
+    # Official PMK 168/2023 TER table hit: TK/0 → A, 10jt → 200bp (2%) → 200.000.
+    assert body["income_tax"] == 200_000
     assert body["withholding_number"] is None
 
     issued = client.post(

@@ -55,15 +55,23 @@ def test_december_tax_is_annual_minus_jan_nov() -> None:
 
 
 def test_lookup_rate_uses_seeded_table_up_to_32_5jt() -> None:
-    # Seeded layers (verified to Rp32,5jt): 8jt gross hits the 8,55jt layer
-    # → A 125bp, B 175bp, C 200bp.
-    assert ter.lookup_rate("A", 8_000_000) == 125
-    assert ter.lookup_rate("B", 8_000_000) == 175
-    assert ter.lookup_rate("C", 8_000_000) == 200
+    # Official PP 58/2023 & PMK 168/2023 Lampiran I:
+    # 0% ceilings: A <= 5,4jt, B <= 6,2jt, C <= 6,6jt.
+    assert ter.lookup_rate("A", 5_400_000) == 0
+    assert ter.lookup_rate("B", 6_200_000) == 0
+    assert ter.lookup_rate("C", 6_600_000) == 0
+    # 8jt gross: A 150bp (1.5%), B 100bp (1.0%), C 100bp (1.0%).
+    assert ter.lookup_rate("A", 8_000_000) == 150
+    assert ter.lookup_rate("B", 8_000_000) == 100
+    assert ter.lookup_rate("C", 8_000_000) == 100
+    # 10jt gross: A 200bp (2.0%), B 150bp (1.5%), C 150bp (1.5%).
+    assert ter.lookup_rate("A", 10_000_000) == 200
+    assert ter.lookup_rate("B", 10_000_000) == 150
+    assert ter.lookup_rate("C", 10_000_000) == 150
     # monthly_tax integration: 8jt x category rate.
-    assert ter.monthly_tax(8_000_000, ter.lookup_rate("A", 8_000_000) or 0) == 100_000
-    assert ter.monthly_tax(8_000_000, ter.lookup_rate("B", 8_000_000) or 0) == 140_000
-    assert ter.monthly_tax(8_000_000, ter.lookup_rate("C", 8_000_000) or 0) == 160_000
+    assert ter.monthly_tax(8_000_000, ter.lookup_rate("A", 8_000_000) or 0) == 120_000
+    assert ter.monthly_tax(8_000_000, ter.lookup_rate("B", 8_000_000) or 0) == 80_000
+    assert ter.monthly_tax(8_000_000, ter.lookup_rate("C", 8_000_000) or 0) == 80_000
     # Full Lampiran I table: layers above Rp32,5jt resolve to official rates,
     # each category peaking at 34% open-ended.
     assert ter.lookup_rate("A", 35_400_000) == 1400

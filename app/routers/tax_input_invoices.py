@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import or_
+from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
@@ -37,6 +38,8 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.tax_input_invoice import (
     DPP_OTHER_CODES,
+    TaxInputBroadcastCreate,
+    TaxInputBroadcastResult,
     TaxInputBulkCredit,
     TaxInputBulkCreditResult,
     TaxInputBulkDelete,
@@ -158,7 +161,32 @@ def recalculate_input_invoice(session: Session, invoice: TaxInputInvoice) -> Non
     session.add(invoice)
 
 
-def build_input_line(data: TaxInputLineCreate, *, invoice_id: int, line_order: int) -> TaxInputLine:
+def build_input_line(
+    data: TaxInputLineCreate,
+    *,
+    invoice_id: int,
+    line_order: int,
+    forced_dpp_other: bool = False,
+) -> TaxInputLine:
+    quantity_milli = quantity_to_milli(data.quantity)
+    total = Decimal(data.unit_price) * Decimal(quantity_milli) / Decimal("1000")
+    total_price = int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    dpp = data.dpp if data.dpp is not None else max(total_price - data.discount, 0)
+    use_dpp_other = True if forced_dpp_other else data.use_dpp_other
+    if data.dpp_other is not None:
+        dpp_other = data.dpp_other if use_dpp_other else 0
+    else:
+        dpp_other = dpp_nilai_lain(dpp) if use_dpp_other else 0
+    ppn_bp = percent_to_basis_points(data.ppn_rate_percent)
+    ppnbm_bp = percent_to_basis_points(data.ppnbm_rate_percent)
+    if data.ppn is not None:
+        ppn = data.ppn
+    else:
+        ppn = apply_basis_points(dpp_other if use_dpp_other else dpp, ppn_bp)
+    if data.ppnbm is not None:
+        ppnbm = data.ppnbm
+    else:
+        ppnbm = apply_basis_points(dpp, ppnbm_bp)
     return TaxInputLine(
         invoice_id=invoice_id,
         line_order=line_order,
@@ -167,12 +195,56 @@ def build_input_line(data: TaxInputLineCreate, *, invoice_id: int, line_order: i
         item_name=data.item_name,
         unit=data.unit,
         unit_price=data.unit_price,
-        quantity_milli=quantity_to_milli(data.quantity),
+        quantity_milli=quantity_milli,
+        total_price=total_price,
         discount=data.discount,
-        use_dpp_other=data.use_dpp_other,
-        ppn_rate_basis_points=percent_to_basis_points(data.ppn_rate_percent),
-        ppnbm_rate_basis_points=percent_to_basis_points(data.ppnbm_rate_percent),
+        dpp=dpp,
+        use_dpp_other=use_dpp_other,
+        dpp_other=dpp_other,
+        ppn_rate_basis_points=ppn_bp,
+        ppn=ppn,
+        ppnbm_rate_basis_points=ppnbm_bp,
+        ppnbm=ppnbm,
     )
+
+
+def rollup_input_totals(session: Session, invoice: TaxInputInvoice) -> None:
+    """Sum stored line amounts into the header without overwriting manual values."""
+    lines = _input_lines(session, invoice.id)
+    invoice.total_price = sum(line.total_price for line in lines)
+    invoice.total_discount = sum(line.discount for line in lines)
+    invoice.total_dpp = sum(line.dpp for line in lines)
+    invoice.total_dpp_other = sum(line.dpp_other for line in lines)
+    invoice.total_ppn = sum(line.ppn for line in lines)
+    invoice.total_ppnbm = sum(line.ppnbm for line in lines)
+    session.add(invoice)
+
+
+def _generate_input_invoice_numbers(
+    session: Session,
+    *,
+    tenant_id: int,
+    tax_year: int,
+    transaction_code: str,
+    count: int,
+) -> list[str]:
+    """Generate `count` unique 17-digit simulated invoice numbers for Pajak Masukan."""
+    yy = f"{tax_year % 100:02d}"
+    session.execute(
+        sa_text("SELECT pg_advisory_xact_lock(:key1, :key2)"),
+        {"key1": tenant_id, "key2": 20_000_000 + tax_year},
+    )
+    used = session.exec(
+        select(TaxInputInvoice.invoice_number).where(
+            TaxInputInvoice.tenant_id == tenant_id,
+            TaxInputInvoice.tax_year == tax_year,
+            TaxInputInvoice.invoice_number.is_not(None),
+            func.length(TaxInputInvoice.invoice_number) == 17,
+        )
+    ).all()
+    serials = [int(n[-11:]) for n in used if n and n[-11:].isdigit()]
+    start = max(serials, default=0) + 1
+    return [f"{transaction_code}00{yy}{(start + idx):011d}" for idx in range(count)]
 
 
 # --- access helpers -----------------------------------------------------------
@@ -687,12 +759,21 @@ def create_input_invoice(
             session.add(
                 build_input_line_from_source(sline, invoice_id=invoice.id, line_order=order)
             )
+        session.flush()
+        recalculate_input_invoice(session, invoice)
     else:
+        forced = data.transaction_code in DPP_OTHER_CODES
         for order, line_data in enumerate(data.lines):
-            session.add(build_input_line(line_data, invoice_id=invoice.id, line_order=order))
-    session.flush()
-
-    recalculate_input_invoice(session, invoice)
+            session.add(
+                build_input_line(
+                    line_data,
+                    invoice_id=invoice.id,
+                    line_order=order,
+                    forced_dpp_other=forced,
+                )
+            )
+        session.flush()
+        rollup_input_totals(session, invoice)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -700,6 +781,133 @@ def create_input_invoice(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Terjadi benturan data, silakan coba lagi") from exc
     session.refresh(invoice)
     return invoice_to_read(session, invoice)
+
+
+@router.post(
+    "/broadcast",
+    response_model=TaxInputBroadcastResult,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_review_roles],
+)
+def broadcast_input_invoice(
+    data: TaxInputBroadcastCreate, current_user: CurrentUser, session: SessionDep
+) -> TaxInputBroadcastResult:
+    """Guru/Admin broadcasts one Pajak Masukan to every active student in a class."""
+    school_class = session.get(SchoolClass, data.class_id)
+    if school_class is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kelas tidak ditemukan")
+    if current_user.role == Role.guru and school_class.guru_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bukan kelas Anda")
+    if current_user.role == Role.admin and school_class.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses lintas tenant ditolak")
+
+    _reject_pengganti(data.invoice_kind)
+    _validate_tax_period(data.invoice_date, data.tax_month, data.tax_year)
+
+    students = list(
+        session.exec(
+            select(User)
+            .join(Enrollment, Enrollment.siswa_id == User.id)
+            .where(
+                Enrollment.class_id == school_class.id,
+                User.role == Role.siswa,
+                User.is_active.is_(True),
+            )
+            .order_by(User.id)
+        ).all()
+    )
+    if not students:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Belum ada siswa aktif yang terdaftar pada kelas ini",
+        )
+
+    numbers = _generate_input_invoice_numbers(
+        session,
+        tenant_id=school_class.tenant_id,
+        tax_year=data.tax_year,
+        transaction_code=data.transaction_code,
+        count=len(students),
+    )
+    now = datetime.now(UTC)
+    forced = data.transaction_code in DPP_OTHER_CODES
+    created_ids: list[int] = []
+
+    for student, inv_number in zip(students, numbers, strict=True):
+        raw_digits = "".join(ch for ch in (student.username or "") if ch.isdigit())
+        buyer_npwp = (
+            raw_digits.zfill(16)[-16:] if raw_digits else f"{student.id:016d}"
+        )
+        inv = TaxInputInvoice(
+            tenant_id=school_class.tenant_id,
+            class_id=school_class.id,
+            siswa_id=student.id,
+            created_by_id=current_user.id,
+            status=TaxInvoiceStatus.issued,
+            invoice_number=inv_number,
+            issued_at=now,
+            electronic_signature_status="signed",
+            credit_status=TaxInputCreditStatus.not_credited,
+            origin=TaxInputOrigin.prepopulated,
+            is_advance_payment=data.is_advance_payment,
+            is_settlement=data.is_settlement,
+            transaction_code=data.transaction_code,
+            invoice_date=data.invoice_date,
+            invoice_kind=data.invoice_kind,
+            tax_month=data.tax_month,
+            tax_year=data.tax_year,
+            reference=data.reference,
+            seller_npwp=data.seller_npwp,
+            seller_name=data.seller_name,
+            seller_address=data.seller_address,
+            seller_idtku=data.seller_idtku or "000000",
+            buyer_identity_type=BuyerIdentityType.npwp,
+            buyer_identity_number=buyer_npwp,
+            buyer_country="ID",
+            buyer_name=student.full_name,
+            buyer_idtku="000000",
+            buyer_email=student.email,
+        )
+        session.add(inv)
+        session.flush()
+        for order, line_data in enumerate(data.lines):
+            session.add(
+                build_input_line(
+                    line_data,
+                    invoice_id=inv.id,
+                    line_order=order,
+                    forced_dpp_other=forced,
+                )
+            )
+        session.flush()
+        rollup_input_totals(session, inv)
+        created_ids.append(inv.id)
+
+    log_action(
+        session,
+        actor=current_user,
+        action="faktur_masukan.broadcast",
+        entity="faktur_masukan",
+        entity_id=school_class.id,
+        tenant_id=school_class.tenant_id,
+        summary=(
+            f"Mengirim Pajak Masukan dari {data.seller_name} "
+            f"ke {len(created_ids)} siswa kelas {school_class.name}"
+        ),
+    )
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Terjadi benturan nomor faktur, silakan coba lagi",
+        ) from exc
+    return TaxInputBroadcastResult(
+        sent=len(created_ids),
+        class_id=school_class.id,
+        invoice_ids=created_ids,
+    )
 
 
 @router.post("/bulk-credit", response_model=TaxInputBulkCreditResult, dependencies=[_credit_roles])
@@ -883,11 +1091,20 @@ def update_input_invoice(
         for existing in _input_lines(session, invoice.id):
             session.delete(existing)
         session.flush()
+        forced = invoice.transaction_code in DPP_OTHER_CODES
         for order, line_data in enumerate(lines):
-            session.add(build_input_line(TaxInputLineCreate.model_validate(line_data), invoice_id=invoice.id, line_order=order))
+            session.add(
+                build_input_line(
+                    TaxInputLineCreate.model_validate(line_data),
+                    invoice_id=invoice.id,
+                    line_order=order,
+                    forced_dpp_other=forced,
+                )
+            )
         session.flush()
-
-    recalculate_input_invoice(session, invoice)
+        rollup_input_totals(session, invoice)
+    else:
+        recalculate_input_invoice(session, invoice)
     try:
         session.commit()
     except IntegrityError as exc:

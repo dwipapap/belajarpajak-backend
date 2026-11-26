@@ -49,9 +49,13 @@ class TaxInvoiceLineBase(BaseModel):
     quantity: Decimal = Field(default=Decimal("1"), ge=0)
     discount: int = Field(default=0, ge=0)
 
+    dpp: int | None = Field(default=None, ge=0)
     use_dpp_other: bool = False
+    dpp_other: int | None = Field(default=None, ge=0)
     ppn_rate_percent: float = Field(default=12, ge=0, le=100)
+    ppn: int | None = Field(default=None, ge=0)
     ppnbm_rate_percent: float = Field(default=0, ge=0, le=100)
+    ppnbm: int | None = Field(default=None, ge=0)
 
     @field_validator("quantity")
     @classmethod
@@ -73,9 +77,13 @@ class TaxInvoiceLineUpdate(BaseModel):
     unit_price: int | None = Field(default=None, ge=0)
     quantity: Decimal | None = Field(default=None, ge=0)
     discount: int | None = Field(default=None, ge=0)
+    dpp: int | None = Field(default=None, ge=0)
     use_dpp_other: bool | None = None
+    dpp_other: int | None = Field(default=None, ge=0)
     ppn_rate_percent: float | None = Field(default=None, ge=0, le=100)
+    ppn: int | None = Field(default=None, ge=0)
     ppnbm_rate_percent: float | None = Field(default=None, ge=0, le=100)
+    ppnbm: int | None = Field(default=None, ge=0)
 
     @field_validator("quantity")
     @classmethod

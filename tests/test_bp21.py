@@ -68,7 +68,7 @@ def test_siswa_can_create_and_issue_bp21(client: TestClient) -> None:
     assert issued_body["electronic_signature_status"] == "signed"
 
 
-def test_bp21_non_final_with_ptkp_uses_progressive_tariff(client: TestClient) -> None:
+def test_bp21_non_final_uses_manual_rate(client: TestClient) -> None:
     headers = auth_headers(client, SISWA_A)
     class_id = _first_class_id(client, headers)
     payload = _bp21_payload(class_id)
@@ -79,7 +79,8 @@ def test_bp21_non_final_with_ptkp_uses_progressive_tariff(client: TestClient) ->
     created = client.post("/api/v1/bp21", headers=headers, json=payload)
 
     assert created.status_code == 201
-    assert created.json()["income_tax"] == 325_000
+    assert created.json()["income_tax"] == 500_000
+    assert created.json()["calculation_method"] == "manual"
 
 
 def test_bp21_progressive_falls_back_without_tariff_year(client: TestClient) -> None:
@@ -108,7 +109,7 @@ def test_bp21_final_ignores_ptkp(client: TestClient) -> None:
     assert created.json()["income_tax"] == 250_000
 
 
-def test_bp21_update_recalculates_progressive_tax(client: TestClient) -> None:
+def test_bp21_update_recalculates_manual_tax(client: TestClient) -> None:
     headers = auth_headers(client, SISWA_A)
     class_id = _first_class_id(client, headers)
     created = client.post("/api/v1/bp21", headers=headers, json=_bp21_payload(class_id)).json()
@@ -116,11 +117,11 @@ def test_bp21_update_recalculates_progressive_tax(client: TestClient) -> None:
     updated = client.patch(
         f"/api/v1/bp21/{created['id']}",
         headers=headers,
-        json={"gross_income": 10_000_000, "ptkp_status": "TK/0"},
+        json={"gross_income": 10_000_000, "rate_percent": "2.5"},
     )
 
     assert updated.status_code == 200
-    assert updated.json()["income_tax"] == 325_000
+    assert updated.json()["income_tax"] == 250_000
 
 
 def test_siswa_can_invalidate_own_bp21(client: TestClient) -> None:
@@ -198,7 +199,7 @@ def test_bp21_issue_requires_kode_otorisasi(client: TestClient) -> None:
     assert ok.json()["calculation_method"] is not None
 
 
-def test_bp21_non_final_jan_nov_without_ter_rejected(client: TestClient) -> None:
+def test_bp21_non_final_jan_nov_without_ter_allowed(client: TestClient) -> None:
     headers = auth_headers(client, SISWA_A)
     class_id = _first_class_id(client, headers)
     payload = _bp21_payload(class_id)
@@ -207,8 +208,8 @@ def test_bp21_non_final_jan_nov_without_ter_rejected(client: TestClient) -> None
 
     created = client.post("/api/v1/bp21", headers=headers, json=payload)
 
-    assert created.status_code == 422
-    assert "TER" in created.json()["detail"]
+    assert created.status_code == 201
+    assert created.json()["calculation_method"] == "manual"
 
 
 def test_other_tenant_admin_cannot_see_bp21(client: TestClient) -> None:
@@ -257,8 +258,8 @@ def test_bp21_ter_jan_nov_uses_sim_ter(client: TestClient) -> None:
 
     assert created.status_code == 201
     body = created.json()
-    # Official TER table hit: A, 8jt → 125bp → 100.000 (SIM fallback 80.000).
-    assert body["income_tax"] == 100_000
+    # Official PMK 168/2023 TER table hit: A, 8jt → 150bp (1.5%) → 120.000.
+    assert body["income_tax"] == 120_000
     assert body["calculation_method"] == "ter"
     assert body["ter_category"] == "A"
 

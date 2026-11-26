@@ -153,7 +153,32 @@ def recalculate_invoice(session: Session, invoice: TaxInvoice) -> None:
     session.add(invoice)
 
 
-def build_line(data: TaxInvoiceLineCreate, *, invoice_id: int, line_order: int) -> TaxInvoiceLine:
+def build_line(
+    data: TaxInvoiceLineCreate,
+    *,
+    invoice_id: int,
+    line_order: int,
+    forced_dpp_other: bool = False,
+) -> TaxInvoiceLine:
+    quantity_milli = quantity_to_milli(data.quantity)
+    total = Decimal(data.unit_price) * Decimal(quantity_milli) / Decimal("1000")
+    total_price = int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    dpp = data.dpp if data.dpp is not None else max(total_price - data.discount, 0)
+    use_dpp_other = True if forced_dpp_other else data.use_dpp_other
+    if data.dpp_other is not None:
+        dpp_other = data.dpp_other if use_dpp_other else 0
+    else:
+        dpp_other = dpp_nilai_lain(dpp) if use_dpp_other else 0
+    ppn_bp = percent_to_basis_points(data.ppn_rate_percent)
+    ppnbm_bp = percent_to_basis_points(data.ppnbm_rate_percent)
+    if data.ppn is not None:
+        ppn = data.ppn
+    else:
+        ppn = apply_basis_points(dpp_other if use_dpp_other else dpp, ppn_bp)
+    if data.ppnbm is not None:
+        ppnbm = data.ppnbm
+    else:
+        ppnbm = apply_basis_points(dpp, ppnbm_bp)
     return TaxInvoiceLine(
         invoice_id=invoice_id,
         line_order=line_order,
@@ -162,12 +187,29 @@ def build_line(data: TaxInvoiceLineCreate, *, invoice_id: int, line_order: int) 
         item_name=data.item_name,
         unit=data.unit,
         unit_price=data.unit_price,
-        quantity_milli=quantity_to_milli(data.quantity),
+        quantity_milli=quantity_milli,
+        total_price=total_price,
         discount=data.discount,
-        use_dpp_other=data.use_dpp_other,
-        ppn_rate_basis_points=percent_to_basis_points(data.ppn_rate_percent),
-        ppnbm_rate_basis_points=percent_to_basis_points(data.ppnbm_rate_percent),
+        dpp=dpp,
+        use_dpp_other=use_dpp_other,
+        dpp_other=dpp_other,
+        ppn_rate_basis_points=ppn_bp,
+        ppn=ppn,
+        ppnbm_rate_basis_points=ppnbm_bp,
+        ppnbm=ppnbm,
     )
+
+
+def rollup_invoice_totals(session: Session, invoice: TaxInvoice) -> None:
+    """Sum stored line amounts into the invoice header without overwriting manual line values."""
+    lines = _invoice_lines(session, invoice.id)
+    invoice.total_price = sum(line.total_price for line in lines)
+    invoice.total_discount = sum(line.discount for line in lines)
+    invoice.total_dpp = sum(line.dpp for line in lines)
+    invoice.total_dpp_other = sum(line.dpp_other for line in lines)
+    invoice.total_ppn = sum(line.ppn for line in lines)
+    invoice.total_ppnbm = sum(line.ppnbm for line in lines)
+    session.add(invoice)
 
 
 def generate_invoice_number(session: Session, invoice: TaxInvoice) -> str:
@@ -437,8 +479,16 @@ def _replace_lines(
     for existing in _invoice_lines(session, invoice.id):
         session.delete(existing)
     session.flush()
+    forced = invoice.transaction_code in DPP_OTHER_CODES
     for order, line_data in enumerate(lines):
-        session.add(build_line(line_data, invoice_id=invoice.id, line_order=order))
+        session.add(
+            build_line(
+                line_data,
+                invoice_id=invoice.id,
+                line_order=order,
+                forced_dpp_other=forced,
+            )
+        )
     session.flush()
 
 
@@ -720,11 +770,19 @@ def create_invoice(
     session.add(invoice)
     session.flush()
 
+    forced = data.transaction_code in DPP_OTHER_CODES
     for order, line_data in enumerate(data.lines):
-        session.add(build_line(line_data, invoice_id=invoice.id, line_order=order))
+        session.add(
+            build_line(
+                line_data,
+                invoice_id=invoice.id,
+                line_order=order,
+                forced_dpp_other=forced,
+            )
+        )
     session.flush()
 
-    recalculate_invoice(session, invoice)
+    rollup_invoice_totals(session, invoice)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -772,12 +830,6 @@ def bulk_issue(
             )
             session.add(invoice)
             session.flush()
-            if invoice.buyer_siswa_id is not None:
-                buyer = session.get(User, invoice.buyer_siswa_id)
-                if buyer is not None:
-                    _prepopulate_for_buyer(
-                        session, invoice, buyer, actor_id=current_user.id
-                    )
             session.commit()
             result.issued += 1
         except IntegrityError:
@@ -863,8 +915,9 @@ def update_invoice(
 
     if lines is not None:
         _replace_lines(session, invoice, [TaxInvoiceLineCreate.model_validate(x) for x in lines])
-
-    recalculate_invoice(session, invoice)
+        rollup_invoice_totals(session, invoice)
+    else:
+        recalculate_invoice(session, invoice)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -906,10 +959,6 @@ def issue(
     issue_invoice(session, invoice, signer_id=current_user.id, signer_name=signer_name)
     session.add(invoice)
     session.flush()
-    if invoice.buyer_siswa_id is not None:
-        buyer = session.get(User, invoice.buyer_siswa_id)
-        if buyer is not None:
-            _prepopulate_for_buyer(session, invoice, buyer, actor_id=current_user.id)
     try:
         session.commit()
     except IntegrityError as exc:

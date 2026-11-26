@@ -49,9 +49,13 @@ class TaxInputLineBase(BaseModel):
     quantity: Decimal = Field(default=Decimal("1"), ge=0)
     discount: int = Field(default=0, ge=0)
 
+    dpp: int | None = Field(default=None, ge=0)
     use_dpp_other: bool = False
+    dpp_other: int | None = Field(default=None, ge=0)
     ppn_rate_percent: float = Field(default=12, ge=0, le=100)
+    ppn: int | None = Field(default=None, ge=0)
     ppnbm_rate_percent: float = Field(default=0, ge=0, le=100)
+    ppnbm: int | None = Field(default=None, ge=0)
 
     @field_validator("quantity")
     @classmethod
@@ -148,6 +152,33 @@ class TaxInputCreate(TaxInputBase):
     """
 
     lines: list[TaxInputLineCreate] = Field(default_factory=list, max_length=100)
+
+
+class TaxInputBroadcastCreate(BaseModel):
+    """Guru/Admin sends one Pajak Masukan template to every student in a class."""
+
+    class_id: int
+    is_advance_payment: bool = False
+    is_settlement: bool = False
+    transaction_code: str = Field(pattern=r"^(0[1-9]|10)$")
+    invoice_date: date
+    invoice_kind: TaxInvoiceKind = TaxInvoiceKind.normal
+    tax_month: int = Field(ge=1, le=12)
+    tax_year: int = Field(ge=2020, le=2100)
+    reference: str | None = Field(default=None, max_length=255)
+
+    seller_npwp: str | None = Field(default=None, max_length=32)
+    seller_name: str = Field(min_length=1, max_length=150)
+    seller_address: str | None = Field(default=None, max_length=255)
+    seller_idtku: str | None = Field(default="000000", max_length=32)
+
+    lines: list[TaxInputLineCreate] = Field(min_length=1, max_length=100)
+
+
+class TaxInputBroadcastResult(BaseModel):
+    sent: int = 0
+    class_id: int
+    invoice_ids: list[int] = Field(default_factory=list)
 
 
 class TaxInputUpdate(BaseModel):

@@ -353,30 +353,54 @@ def _issue_keluaran_with_buyer(
     return issued.json()
 
 
-def test_issue_with_classmate_buyer_prepopulates_masukan(client: TestClient):
-    seller_headers = auth_headers(client, SISWA)
+def test_guru_broadcast_prepopulates_masukan_for_all_class_students(client: TestClient):
+    guru_headers = auth_headers(client, GURU)
     buyer_headers = auth_headers(client, BUYER_SISWA)
     class_id, _, buyer_id = _classmates(client)
 
-    issued = _issue_keluaran_with_buyer(
-        client,
-        seller_headers,
-        class_id,
-        buyer_id,
-        invoice_date="2026-09-18",
-        tax_month=9,
+    res = client.post(
+        "/api/v1/faktur-masukan/broadcast",
+        json={
+            "class_id": class_id,
+            "transaction_code": "01",
+            "invoice_date": "2026-09-18",
+            "invoice_kind": "normal",
+            "tax_month": 9,
+            "tax_year": 2026,
+            "reference": "BROADCAST-TEST-01",
+            "seller_npwp": "0123456789012345",
+            "seller_name": "PT Pemasok Simulasi Guru",
+            "seller_address": "Jl. Pemasok No. 9",
+            "lines": [
+                {
+                    "line_type": "barang",
+                    "item_code": "000000",
+                    "item_name": "Barang Broadcast",
+                    "unit": "Unit",
+                    "unit_price": 1_000_000,
+                    "quantity": 1,
+                    "discount": 0,
+                    "use_dpp_other": False,
+                    "ppn_rate_percent": 12,
+                    "ppnbm_rate_percent": 0,
+                }
+            ],
+        },
+        headers=guru_headers,
     )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["sent"] >= 2
+    assert body["class_id"] == class_id
 
     items = client.get("/api/v1/faktur-masukan", headers=buyer_headers).json()["items"]
-    found = [m for m in items if m["source_invoice_id"] == issued["id"]]
+    found = [m for m in items if m["id"] in body["invoice_ids"]]
     assert len(found) == 1
     masukan = found[0]
     assert masukan["origin"] == "prepopulated"
     assert masukan["status"] == "issued"
     assert masukan["credit_status"] == "not_credited"
-    assert masukan["invoice_number"] == issued["invoice_number"]
-    assert masukan["total_ppn"] == issued["total_ppn"]
-    assert len(masukan["lines"]) == len(issued["lines"])
+    assert masukan["total_ppn"] == 120_000
     assert masukan["siswa_id"] == buyer_id
 
 
@@ -408,20 +432,39 @@ def test_buyer_self_rejected(client: TestClient):
 
 
 def test_tidak_kreditkan_and_kembali_approved(client: TestClient):
-    seller_headers = auth_headers(client, SISWA)
+    guru_headers = auth_headers(client, GURU)
     buyer_headers = auth_headers(client, BUYER_SISWA)
-    class_id, _, buyer_id = _classmates(client)
+    class_id, _, _ = _classmates(client)
 
-    issued = _issue_keluaran_with_buyer(
-        client,
-        seller_headers,
-        class_id,
-        buyer_id,
-        invoice_date="2026-09-19",
-        tax_month=9,
-    )
+    broadcast = client.post(
+        "/api/v1/faktur-masukan/broadcast",
+        json={
+            "class_id": class_id,
+            "transaction_code": "01",
+            "invoice_date": "2026-09-19",
+            "invoice_kind": "normal",
+            "tax_month": 9,
+            "tax_year": 2026,
+            "seller_npwp": "0123456789012345",
+            "seller_name": "PT Pemasok Simulasi",
+            "lines": [
+                {
+                    "line_type": "barang",
+                    "item_name": "Barang Uji",
+                    "unit": "Unit",
+                    "unit_price": 500_000,
+                    "quantity": 1,
+                    "discount": 0,
+                    "use_dpp_other": False,
+                    "ppn_rate_percent": 12,
+                    "ppnbm_rate_percent": 0,
+                }
+            ],
+        },
+        headers=guru_headers,
+    ).json()
     items = client.get("/api/v1/faktur-masukan", headers=buyer_headers).json()["items"]
-    masukan = next(m for m in items if m["source_invoice_id"] == issued["id"])
+    masukan = next(m for m in items if m["id"] in broadcast["invoice_ids"])
 
     url_tidak = f"/api/v1/faktur-masukan/{masukan['id']}/tidak-kreditkan"
     res = client.post(url_tidak, headers=buyer_headers)
@@ -441,6 +484,8 @@ def test_tidak_kreditkan_and_kembali_approved(client: TestClient):
     credited = client.post(f"/api/v1/faktur-masukan/{masukan['id']}/credit", headers=buyer_headers)
     assert credited.status_code == 200, credited.text
     assert credited.json()["credit_status"] == "credited"
+    # Clean up credit state so persistent test DB stays clean for SPT tests in the same month.
+    client.post(f"/api/v1/faktur-masukan/{masukan['id']}/uncredit", headers=buyer_headers)
 
 
 def test_cancel_source_invalidates_derived(client: TestClient):
@@ -457,8 +502,14 @@ def test_cancel_source_invalidates_derived(client: TestClient):
         invoice_date="2026-10-18",
         tax_month=10,
     )
-    items = client.get("/api/v1/faktur-masukan", headers=buyer_headers).json()["items"]
-    masukan = next(m for m in items if m["source_invoice_id"] == issued["id"])
+    masukan = _create(
+        client,
+        buyer_headers,
+        source_invoice_id=issued["id"],
+        invoice_date="2026-10-18",
+        tax_month=10,
+        lines=[],
+    )
 
     res = client.post(
         f"/api/v1/faktur-keluaran/{issued['id']}/cancel",
@@ -486,8 +537,14 @@ def test_cancel_blocked_when_derived_in_reported_spt(client: TestClient):
         invoice_date=f"2026-{month:02d}-18",
         tax_month=month,
     )
-    items = client.get("/api/v1/faktur-masukan", headers=buyer_headers).json()["items"]
-    masukan = next(m for m in items if m["source_invoice_id"] == issued["id"])
+    masukan = _create(
+        client,
+        buyer_headers,
+        source_invoice_id=issued["id"],
+        invoice_date=f"2026-{month:02d}-18",
+        tax_month=month,
+        lines=[],
+    )
     credited_res = client.post(
         f"/api/v1/faktur-masukan/{masukan['id']}/credit", headers=buyer_headers
     )
